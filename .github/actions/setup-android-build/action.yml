@@ -1,0 +1,35 @@
+name: Android derleme ortamı
+description: JDK 17, Gradle, SDK lisansları ve Gradle wrapper hazırlığı (tüm işlerde ortak; tek yerde güncellenir)
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-java@v5
+      with:
+        distribution: temurin
+        java-version: '17'
+
+    - uses: gradle/actions/setup-gradle@v5
+      with:
+        gradle-version: '8.14.8'
+
+    - name: Betikleri hazırla (CRLF → LF, çalıştırma izni)
+      shell: bash
+      run: |
+        # Windows'ta düzenlenen dosyalardaki satır sonu (CRLF) bash betiklerini bozar; her çalıştırmada normalize edilir.
+        sed -i 's/\r$//' .github/scripts/*.sh
+        chmod +x .github/scripts/*.sh
+
+    - name: SDK lisansları ve Gradle wrapper
+      shell: bash
+      run: |
+        yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null 2>&1 || true
+        "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;36.0.0"
+        if [ ! -f gradlew ] || [ ! -f gradle/wrapper/gradle-wrapper.jar ]; then
+          gradle wrapper --gradle-version 8.14.8 --distribution-type bin
+        fi
+        chmod +x gradlew
+        grep -q '^distributionSha256Sum=94da89692fc3ca6d2d0ce6bb48548762ea0f1897ba444286f5c7f3759c7af651$' gradle/wrapper/gradle-wrapper.properties || {
+          echo 'distributionSha256Sum=94da89692fc3ca6d2d0ce6bb48548762ea0f1897ba444286f5c7f3759c7af651' >> gradle/wrapper/gradle-wrapper.properties
+        }
+        ./gradlew --version

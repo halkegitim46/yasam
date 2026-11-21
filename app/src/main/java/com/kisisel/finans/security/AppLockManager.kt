@@ -1,0 +1,83 @@
+package com.kisisel.finans.security
+
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import javax.inject.Inject
+import javax.inject.Singleton
+
+enum class LockState { LOADING, NEEDS_SETUP, LOCKED, UNLOCKED }
+
+/**
+ * Uygulama kilit durumu. Süreç yeniden başladığında her zaman kilitli başlar.
+ * Arka plana geçiş/dönüş zamanları Activity'den (SystemClock.elapsedRealtime) verilir; böylece mantık saf ve test edilebilir.
+ */
+@Singleton
+class AppLockManager @Inject constructor() {
+
+    private val _state = MutableStateFlow(LockState.LOADING)
+    val state: StateFlow<LockState> = _state.asStateFlow()
+
+    @Volatile
+    private var settings = SecuritySettings()
+    @Volatile
+    private var backgroundedAt: Long? = null
+    @Volatile
+    private var suppressLockUntil: Long = Long.MIN_VALUE
+
+    /** Ayarlar her değiştiğinde Activity tarafından iletilir. İlk iletimde başlangıç durumu belirlenir. */
+    fun onSettings(s: SecuritySettings) {
+        settings = s
+        if (_state.value == LockState.LOADING) {
+            _state.value = if (s.passwordRecord == null) LockState.NEEDS_SETUP else LockState.LOCKED
+        }
+    }
+
+    fun onUnlocked() {
+        _state.value = LockState.UNLOCKED
+    }
+
+    fun lock() {
+        if (_state.value == LockState.UNLOCKED) _state.value = LockState.LOCKED
+    }
+
+    /**
+     * Yedekleme/dışa aktarma gibi sistem dosya seçicisine gitmeden önce çağrılır. Seçicinin sonuç geri çağrısı
+     * [endExternalUi] ile istisnayı bitirene kadar (en çok [EXTERNAL_UI_WINDOW_MS]) arka plandan dönüşte kilitlenmez;
+     * aksi halde seçici sonucu kilit ekranında kaybolurdu. Sonuç gelince (iptal dahil) istisna hemen kalkar.
+     */
+    fun allowExternalUi(elapsedMillis: Long) {
+        suppressLockUntil = elapsedMillis + EXTERNAL_UI_WINDOW_MS
+    }
+
+    /** Dosya seçici sonucu (veya iptali) alındı: istisna biter, sonraki arka plan geçişleri normal kilitler. */
+    fun endExternalUi() {
+        suppressLockUntil = Long.MIN_VALUE
+    }
+
+    fun onBackgrounded(elapsedMillis: Long) {
+        backgroundedAt = elapsedMillis
+    }
+
+    /** Ön plana dönünce, ayarlanan süre aşıldıysa kilitler. Eşzamanlıdır (içerik bir an görünmesin). */
+    fun onForegrounded(elapsedMillis: Long) {
+        val at = backgroundedAt ?: return
+        backgroundedAt = null
+        if (suppressLockUntil >= elapsedMillis) {
+            // Dosya seçici hâlâ etkin (sonuç geri çağrısı bekleniyor): kilitleme.
+            return
+        }
+        val s = settings
+        if (_state.value == LockState.UNLOCKED &&
+            s.passwordRecord != null &&
+            s.lockOnBackground &&
+            elapsedMillis - at >= s.lockTimeoutSeconds * 1000L
+        ) {
+            lock()
+        }
+    }
+
+    private companion object {
+        const val EXTERNAL_UI_WINDOW_MS = 3 * 60 * 1000L
+    }
+}
