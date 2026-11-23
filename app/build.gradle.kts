@@ -7,8 +7,7 @@ plugins {
     alias(libs.plugins.hilt)
 }
 
-// İmza bilgileri ortam değişkenlerinden okunur. GÜNCEL adlar: KEYSTORE_PATH, KEYSTORE_PASSWORD, KEY_ALIAS, KEY_PASSWORD.
-// Geriye uyumluluk için eski KFT_ önekli adlar da kabul edilir (KFT_KEYSTORE_PATH, ...). Tek yerde tanımlı: ad karışıklığı olmasın.
+// İmza bilgileri ortam değişkenlerinden okunur.
 fun signingEnv(name: String): String? =
     (System.getenv(name) ?: System.getenv("KFT_$name"))?.takeIf { it.isNotBlank() }
 
@@ -16,7 +15,7 @@ val keystorePath: String? = signingEnv("KEYSTORE_PATH")
 
 android {
     namespace = "com.kisisel.finans"
-    // compileSdk 37: Compose 1.12+ ve AGP 9.5 ile gelen en yüksek API. targetSdk 36 (Android 16) ayrıdır: çalışma davranışını hedef belirler.
+    // compileSdk 37: AGP 9.4'ün desteklediği en yüksek API. targetSdk 36 (Android 16) çalışma davranışını hedefler.
     compileSdk = 37
 
     defaultConfig {
@@ -26,10 +25,9 @@ android {
         versionCode = 1
         versionName = "0.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64") }   // SQLCipher yerel kütüphaneleri
+        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64") }
     }
 
-    // Sabit imza anahtarı (CI'da GitHub Secrets'tan gelir). Aynı anahtar = her sürüm eskisinin üstüne veri kaybı olmadan kurulur.
     signingConfigs {
         create("shared") {
             if (keystorePath != null) {
@@ -46,7 +44,6 @@ android {
             if (keystorePath != null) signingConfig = signingConfigs.getByName("shared")
         }
         release {
-            // R8 küçültme varsayılan açık; sorun çıkarsa -Pkft.minify=false ile kapatılabilir.
             val minify = (project.findProperty("kft.minify") as String?) != "false"
             isMinifyEnabled = minify
             isShrinkResources = minify
@@ -55,7 +52,6 @@ android {
         }
     }
 
-    // Lint raporu üretilir ama release derlemesini engellemez (ayrıntı: app/build/reports).
     lint {
         abortOnError = false
         checkReleaseBuilds = false
@@ -66,7 +62,6 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    // AGP 9 yeni DSL: resourceConfigurations yerine androidResources.localeFilters
     androidResources { localeFilters += "tr" }
 
     buildFeatures { compose = true }
@@ -81,7 +76,6 @@ android {
     packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
 }
 
-// AGP 9 yerleşik Kotlin: 'kotlin' uzantısı android {} bloğunun DIŞINDA tanımlanır.
 kotlin { jvmToolchain(17) }
 
 ksp {
@@ -94,8 +88,21 @@ dependencies {
     implementation(libs.androidx.lifecycle.viewmodel)
     implementation(libs.androidx.activity.compose)
 
+    // Compose BOM: 2026.09.00 → Compose 1.12.1, compileSdk 37 ile uyumlu.
     implementation(platform(libs.compose.bom))
-    implementation(libs.compose.ui)
+    // Compose bileşenlerini açıkça BOM sürümüne sabitle, örtük yükseltmeyi (1.13.0) önle.
+    implementation("androidx.compose.ui:ui") {
+        version { strictly("1.12.1") }
+    }
+    implementation("androidx.compose.foundation:foundation") {
+        version { strictly("1.12.1") }
+    }
+    implementation("androidx.compose.foundation:foundation-layout") {
+        version { strictly("1.12.1") }
+    }
+    implementation("androidx.compose.animation:animation") {
+        version { strictly("1.12.1") }
+    }
     implementation(libs.compose.material3)
     implementation(libs.compose.material.icons)
     debugImplementation(libs.compose.ui.tooling)
@@ -121,14 +128,12 @@ dependencies {
     testImplementation(libs.robolectric)
     testImplementation(libs.androidx.test.core)
 
-    // Cihaz/emülatör testleri (gerçek SQLCipher ve Android Keystore): "Cihaz testleri" workflow'u veya connectedDebugAndroidTest
     androidTestImplementation(libs.androidx.test.ext.junit)
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.androidx.test.core)
     androidTestImplementation(libs.coroutines.android)
 }
 
-// Başarısız testlerin ayrıntısı (hata mesajı ve yığın) CI log'unda görünsün.
 tasks.withType<Test>().configureEach {
     testLogging {
         events("failed")
@@ -137,7 +142,6 @@ tasks.withType<Test>().configureEach {
     }
 }
 
-// Release derlemesi imza bilgisi olmadan sessizce "unsigned" APK üretmesin: açık bir hata ver.
 gradle.taskGraph.whenReady {
     val wantsRelease = allTasks.any { t ->
         t.project == project && (t.name == "assembleRelease" || t.name == "bundleRelease" || t.name == "packageRelease")

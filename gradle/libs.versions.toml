@@ -1,18 +1,16 @@
 # ======================================================================
-# SÜRÜM KATALOĞU — AŞAMA B: AGP 9 + Kotlin 2.4 + Android 36 hedefi
-# Uyumluluk kuralları (CI'da preflight → "Sürüm uyumluluğu" ile derlemeden ÖNCE denetlenir):
-#  1) AGP 9.x yerleşik Kotlin getirir: 'org.jetbrains.kotlin.android' eklentisi KULLANILMAZ (kaldırıldı).
-#  2) Kotlin 2.4.x: AGP >= 9.1 ve Hilt >= 2.60 ister. Hilt >= 2.59 yalnızca AGP 9+ ile çalışır.
-#  3) AGP 9.5: Gradle >= 9.6 (bu projede 9.7.1: Kotlin Gradle eklentisinin test ettiği en yeni Gradle ile AGP'nin alt sınırının kesişimi).
+# SÜRÜM KATALOĞU — AGP 9.4 + Kotlin 2.4 + Android 37 hedefi
+# Uyumluluk kuralları:
+#  1) AGP 9.x yerleşik Kotlin getirir: 'org.jetbrains.kotlin.android' eklentisi KULLANILMAZ.
+#  2) Kotlin 2.4.x: AGP >= 9.1 ve Hilt >= 2.60 ister.
+#  3) AGP 9.4: Gradle >= 9.6 (bu projede 9.7.1 uyumludur).
 #  4) KSP 2.3.x Kotlin'den bağımsızdır; KSP >= 2.3.12 için AGP >= 8.12.
-#  5) Compose 1.12+ (BOM 2026.09+): compileSdk 37 ve AGP 9 ister. BOM 2026.11.01 (Compose 1.13, Material3 1.5) compileSdk 37.1 ister.
-#  6) targetSdk 36 (Android 16), compileSdk 37 (AGP 9.5'in desteklediği en yüksek API).
-# Geri dönüş (Aşama A, CI'da doğrulanacak ara küme): agp 8.13.2, kotlin 2.2.21, ksp 2.3.14, hilt 2.58, room 2.8.4, Gradle 8.13.
-# Son CI'da kanıtlı eski küme: agp 8.7.3, kotlin 2.0.21, ksp 2.0.21-1.0.28, hilt 2.52, room 2.6.1, Gradle 8.9.
-# Ayrıntı: docs/UYUMLULUK.md
+#  5) Compose BOM 2026.09.00 → Compose 1.12.1, compileSdk 37 ile uyumludur.
+#     Compose 1.13.x compileSdk 37.1 ister, AGP 9.4/9.5 bunu DESTEKLEMEZ.
+#  6) targetSdk 36 (Android 16), compileSdk 37 (AGP 9.4'ün desteklediği en yüksek API).
 # ======================================================================
 [versions]
-agp = "9.5.2"
+agp = "9.4.0"
 kotlin = "2.4.21"
 ksp = "2.3.14"
 composeBom = "2026.09.00"
