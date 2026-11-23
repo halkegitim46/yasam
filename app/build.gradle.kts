@@ -69,12 +69,13 @@ android {
             isIncludeAndroidResources = true
             isReturnDefaultValues = true
         }
-        // Robolectric'in jar'ları Maven Central'dan indirmek yerine yerel dizinden okumasını sağla
         unitTests.all {
+            // Robolectric'in indirme kaynağını Google Maven ayna sunucusuna yönlendir, Maven Central 429 hız sınırlamasından kaçın
             it.systemProperty(
-                "robolectric.dependency.dir",
-                layout.buildDirectory.dir("robolectric-deps").get().asFile.absolutePath
+                "robolectric.dependency.repo.url",
+                "https://maven-central.storage-download.googleapis.com/maven2/"
             )
+            it.systemProperty("robolectric.dependency.repo.id", "google-mirror")
         }
     }
 
@@ -86,9 +87,6 @@ kotlin { jvmToolchain(17) }
 ksp {
     arg("room.schemaLocation", "$projectDir/schemas")
 }
-
-// Robolectric'in ihtiyaç duyduğu android-all-instrumented jar'ını taşımak için ayrı konfigürasyon
-val robolectricDeps: Configuration by configurations.creating
 
 dependencies {
     implementation(libs.androidx.core.ktx)
@@ -130,21 +128,9 @@ dependencies {
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.androidx.test.core)
     androidTestImplementation(libs.coroutines.android)
-
-    // Robolectric'in runtime'da indirmeye çalıştığı jar'ı Gradle bağımlılığı olarak tanımla
-    // Sürüm numarası, hata günlüğünüzdeki 14-robolectric-10818077-i7 ile eşleşmelidir
-    robolectricDeps("org.robolectric:android-all-instrumented:14-robolectric-10818077-i7")
 }
 
-// robolectricDeps konfigürasyonundaki jar'ları build/robolectric-deps dizinine kopyala
-val prepareRobolectricDeps by tasks.registering(Copy::class) {
-    from(robolectricDeps)
-    into(layout.buildDirectory.dir("robolectric-deps"))
-}
-
-// Tüm Test görevlerinin önce jar'ların kopyalanmasını beklemesini sağla
 tasks.withType<Test>().configureEach {
-    dependsOn(prepareRobolectricDeps)
     testLogging {
         events("failed")
         exceptionFormat = TestExceptionFormat.FULL
