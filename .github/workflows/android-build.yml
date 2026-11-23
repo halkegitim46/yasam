@@ -1,0 +1,623 @@
+name: Android CI + Release (tek dosya, teşhisli)
+
+# preflight → version → (build | release) → report   (AGP 9 / Kotlin 2.4 / Gradle 9.7)
+#  • preflight: secret, dosya, sürüm satırı ve SÜRÜM UYUMLULUĞU (Kotlin↔KSP↔Hilt↔AGP↔Gradle) derlemeden ÖNCE denetlenir.
+#  • build    : birim testleri + debug APK. Testler kırık olsa bile APK üretilir; iş en sonda yine KIRMIZI biter.
+#  • release  : imzalı, R8'li APK (build'e bağlı değil). Parolalar yalnızca ilgili adımlara verilir.
+#  • report   : hata olduysa özeti "🔴 CI hata raporu (otomatik)" Issue'suna yazar; her şey yeşilse Issue'yu kapatır.
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: "Release APK da üretilsin mi? (KAPATMAK için işareti kaldırın)"
+        type: boolean
+        default: true
+      minify:
+        description: "R8 küçültme (release çöküyorsa false deneyin)"
+        type: choice
+        default: "true"
+        options:
+          - "true"
+          - "false"
+      version_name:
+        description: "Sürüm adı (boşsa 1.0.<yılaygünsaatdakika>)"
+        type: string
+        required: false
+        default: ""
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  GRADLE_VERSION: "9.7.1"    # AGP 9.5 en az Gradle 9.6 ister; Kotlin Gradle eklentisi 2.4.x en çok 9.7 ile test edilir → 9.7.1. Tek yerde tanımlı; preflight bunu okur
+
+jobs:
+  # ============================================================
+  # 0) PREFLIGHT — derlemeden ÖNCE ortamı ve sürüm uyumunu denetler
+  # ============================================================
+  preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      has_keystore: ${{ steps.secrets.outputs.has_keystore }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: "🔎 [preflight] Secret varlığı (değer gösterilmez)"
+        id: secrets
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 || secrets.KFT_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD || secrets.KFT_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS || secrets.KFT_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD || secrets.KFT_KEY_PASSWORD }}
+        run: |
+          has_ks="true"
+          {
+            echo "## 🧪 Preflight — secret durumu"
+            echo ""
+            echo "| Secret | Durum |"
+            echo "|---|---|"
+          } >> "$GITHUB_STEP_SUMMARY"
+          for name in KEYSTORE_BASE64 KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD; do
+            if [ -n "${!name:-}" ]; then
+              echo "  [VAR] $name"
+              echo "| $name | ✅ VAR |" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "  [YOK] $name"
+              echo "| $name | ❌ YOK |" >> "$GITHUB_STEP_SUMMARY"
+              has_ks="false"
+            fi
+          done
+          echo "has_keystore=${has_ks}" >> "$GITHUB_OUTPUT"
+          if [ "$has_ks" = "false" ]; then
+            echo "::warning::İmza secret'ları eksik: release APK üretilemez (debug APK etkilenmez)."
+          fi
+
+      - name: "🔎 [preflight] Proje dosyaları ve sürüm satırları"
+        shell: bash
+        run: |
+          missing=0
+          for f in app/build.gradle.kts app/proguard-rules.pro gradle/libs.versions.toml settings.gradle.kts; do
+            if [ -f "$f" ]; then echo "  [VAR] $f"; else echo "::error::[YOK] $f"; missing=1; fi
+          done
+          if [ -f gradlew ]; then echo "  [VAR] gradlew"; else echo "  [YOK] gradlew — iş akışı üretecek (sorun değil)"; fi
+          grep -qE '^\s*versionCode\s*=\s*[0-9]+' app/build.gradle.kts || { echo "::error::versionCode satırı 'versionCode = <sayı>' biçiminde değil (sed güncelleyemez)"; missing=1; }
+          grep -qE '^\s*versionName\s*=\s*".*"' app/build.gradle.kts || { echo "::error::versionName satırı 'versionName = \"...\"' biçiminde değil (sed güncelleyemez)"; missing=1; }
+          grep -q 'KEYSTORE_PATH' app/build.gradle.kts || echo "::warning::KEYSTORE_PATH build.gradle.kts içinde okunmuyor: release imzasız kalabilir"
+          if grep -q 'taskGraph.whenReady' app/build.gradle.kts; then
+            echo "  [VAR] release imza koruması (taskGraph.whenReady)"
+          else
+            echo "::warning::release imza koruması yok"
+          fi
+          exit $missing
+
+      # Derleme dakikalar sonra gizemli bir hatayla düşmesin: uyumsuz sürüm kümesi 10 saniyede, nedeniyle birlikte yakalanır.
+      - name: "🔎 [preflight] Sürüm uyumluluğu (Kotlin ↔ KSP ↔ Hilt ↔ Room ↔ AGP ↔ Gradle ↔ compileSdk)"
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os, re, sys
+
+          def ver(s):
+              return tuple(int(x) for x in re.findall(r"\d+", s)[:3]) + (0, 0, 0)
+
+          toml = open("gradle/libs.versions.toml", encoding="utf-8").read().split("[libraries]")[0]
+          v = dict(re.findall(r'^([A-Za-z0-9_-]+)\s*=\s*"([^"]+)"', toml, re.M))
+          kts = open("app/build.gradle.kts", encoding="utf-8").read()
+          m = re.search(r"compileSdk\s*=\s*(\d+)", kts)
+          compile_sdk = int(m.group(1)) if m else 0
+          gradle = os.environ.get("GRADLE_VERSION", "9.7.1")
+          kotlin, ksp, hilt, room, agp, bom = (v.get(k, "") for k in ("kotlin", "ksp", "hilt", "room", "agp", "composeBom"))
+          if not m:
+              m2 = re.search(r"release\((\d+)\)", kts)
+              compile_sdk = int(m2.group(1)) if m2 else 0
+
+          errors, warns = [], []
+
+          # 1) KSP: eski biçim "<kotlin>-<ksp>" Kotlin ile eşleşmeli; KSP 2.3+ Kotlin'den bağımsızdır ama Kotlin >= 2.2 ister
+          if re.fullmatch(r"\d+\.\d+\.\d+-\d+\.\d+\.\d+", ksp):
+              if not ksp.startswith(kotlin + "-"):
+                  errors.append(f"KSP sürümü Kotlin ile eşleşmiyor: kotlin={kotlin}, ksp={ksp} (beklenen '{kotlin}-<sürüm>'). KSP bu durumda derlemenin başında durur.")
+          elif re.fullmatch(r"\d+\.\d+\.\d+", ksp):
+              if ver(ksp) >= (2, 3, 0) and ver(kotlin) < (2, 2, 0):
+                  errors.append(f"KSP {ksp} (Kotlin'den bağımsız sürüm) Kotlin 2.2 ve üstünü hedefler; kotlin={kotlin}. Kotlin'i yükseltin ya da '<kotlin>-<ksp>' biçimli eski KSP kullanın.")
+          else:
+              warns.append(f"KSP sürümü ({ksp}) tanınan biçimlerde değil; Kotlin ({kotlin}) ile uyumunu KSP sürüm notlarından doğrulayın.")
+
+          # 2) Hilt ↔ Kotlin metadata
+          if ver(kotlin) >= (2, 2, 0) and ver(hilt) < (2, 57, 0):
+              errors.append(f"Hilt {hilt}, Kotlin {kotlin} meta verisini okuyamaz ('Provided Metadata instance has version 2.2.0...'). Kotlin 2.2.x için Hilt >= 2.57 gerekir.")
+
+          # 3) Room ↔ Kotlin 2.x
+          if ver(kotlin) >= (2, 0, 0) and ver(room) < (2, 6, 1):
+              errors.append(f"Room {room}, Kotlin {kotlin} / KSP2 ile uyumlu değil; en az 2.6.1 gerekir.")
+
+          # 3b) Hilt Gradle eklentisi ↔ AGP: Hilt 2.59+ AGP 9.0+ ister (AGP 8.x ile "only compatible with AGP version 9.0.0 or higher");
+          #     AGP 8.x için son sürüm Hilt 2.58.
+          if ver(hilt) >= (2, 59, 0) and ver(agp)[0] < 9:
+              errors.append(f"Hilt {hilt} Gradle eklentisi AGP 9.0+ ister; AGP {agp} ile derleme yapılandırma aşamasında durur. AGP 8.x için Hilt <= 2.58 kullanın (ya da AGP 9'a + Gradle 9.1+ geçin).")
+          if ver(hilt) < (2, 59, 0) and ver(agp)[0] >= 9:
+              errors.append(f"Hilt {hilt} AGP {agp} (9.x) ile çalışmaz; AGP 9 için Hilt >= 2.59 gerekir.")
+          # 3c) AGP 9 yerleşik Kotlin: KGP >= 2.2.10 ve 'kotlin-android' eklentisi uyumsuz
+          if ver(agp)[0] >= 9 and ver(kotlin) < (2, 2, 10):
+              errors.append(f"AGP {agp} (yerleşik Kotlin) en az Kotlin 2.2.10 ister; kotlin={kotlin}.")
+
+          # 3d) AGP 9 yerleşik Kotlin: 'kotlin-android' eklentisi KULLANILMAMALI
+          if ver(agp)[0] >= 9 and re.search(r"libs\.plugins\.kotlin\.android|org\.jetbrains\.kotlin\.android|kotlin-android", kts):
+              errors.append("AGP 9 yerleşik Kotlin kullanır: app/build.gradle.kts içindeki 'kotlin-android' eklentisini kaldırın (Compose eklentisi ve KSP kalır).")
+          if ver(agp)[0] >= 9 and re.search(r"^\s*resourceConfigurations\b", kts, re.M):
+              errors.append("AGP 9 'resourceConfigurations' özelliğini kaldırdı: android { androidResources { localeFilters += \"tr\" } } kullanın.")
+          # 3e) Kotlin 2.4: AGP >= 9.1, Hilt >= 2.60
+          if ver(kotlin) >= (2, 4, 0):
+              if ver(agp) < (9, 1, 0):
+                  errors.append(f"Kotlin {kotlin} için AGP >= 9.1 gerekir (AGP {agp}).")
+              if ver(hilt) < (2, 60, 0):
+                  errors.append(f"Kotlin {kotlin} meta verisi için Hilt >= 2.60 gerekir (Hilt {hilt}).")
+          # 3f) KSP 2.3.12+ → AGP >= 8.12
+          if re.fullmatch(r"\d+\.\d+\.\d+", ksp) and ver(ksp) >= (2, 3, 12) and ver(agp) < (8, 12, 0):
+              errors.append(f"KSP {ksp} AGP >= 8.12 ister (AGP {agp}).")
+          # 3g) Compose BOM ↔ compileSdk (Compose 1.12+ → compileSdk 37; BOM 2026.11 → 37.1)
+          bomv = ver(bom)[:2] if bom else (0, 0)
+          if bomv >= (2026, 9) and compile_sdk < 37:
+              errors.append(f"Compose BOM {bom} (Compose 1.12+) compileSdk 37 ve AGP 9 ister; compileSdk={compile_sdk}.")
+          if bomv >= (2026, 11):
+              warns.append(f"Compose BOM {bom} (Compose 1.13 / Material3 1.5) compileSdk 37.1 ister: compileSdk {{ version = release(37) {{ minorApiLevel = 1 }} }}.")
+
+          # 4) AGP ↔ Gradle alt sınırı
+          table = [((9, 5), (9, 6, 0)), ((9, 0), (9, 1, 0)), ((8, 13), (8, 13, 0)), ((8, 12), (8, 13, 0)), ((8, 11), (8, 13, 0)),
+                   ((8, 10), (8, 11, 1)), ((8, 9), (8, 11, 1)), ((8, 8), (8, 10, 2)), ((8, 7), (8, 9, 0)),
+                   ((8, 6), (8, 7, 0)), ((8, 5), (8, 7, 0)), ((8, 4), (8, 6, 0)), ((8, 3), (8, 4, 0))]
+          need = next((g for a, g in table if ver(agp)[:2] >= a), None)
+          if need and ver(gradle) < need:
+              errors.append(f"AGP {agp} en az Gradle {'.'.join(map(str, need))} ister; iş akışı Gradle {gradle} kullanıyor (GRADLE_VERSION).")
+
+          # 5) compileSdk ↔ androidx (yeni sürümler compileSdk 36 ister) ve AGP desteği
+          for key, minimum in (("coreKtx", (1, 17, 0)), ("activityCompose", (1, 11, 0))):
+              if key in v and ver(v[key]) >= minimum and compile_sdk < 36:
+                  warns.append(f"{key}={v[key]} compileSdk 36 isteyebilir; compileSdk={compile_sdk}. ('requires ... compile against version 36' hatası alırsanız compileSdk + AGP'yi birlikte yükseltin.)")
+          if compile_sdk >= 36 and ver(agp) < (8, 9, 1):
+              warns.append(f"compileSdk={compile_sdk} için AGP >= 8.9.1 önerilir (şu an {agp}).")
+
+          rows = [("Kotlin", kotlin), ("KSP", ksp), ("Hilt", hilt), ("Room", room), ("AGP", agp), ("Gradle (iş akışı)", gradle), ("Compose BOM", bom), ("compileSdk", str(compile_sdk))]
+          lines = ["## 🧩 Sürüm uyumluluğu", "", "| Bileşen | Sürüm |", "|---|---|"] + [f"| {a} | `{b}` |" for a, b in rows] + [""]
+          lines += [f"- ❌ {e}" for e in errors] + [f"- ⚠️ {w}" for w in warns]
+          if not errors and not warns:
+              lines.append("- ✅ Bilinen uyumsuzluk kuralları geçti.")
+          out = "\n".join(lines)
+          print(out)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as f:
+              f.write(out + "\n")
+          for e in errors:
+              print(f"::error::{e}")
+          for w in warns:
+              print(f"::warning::{w}")
+          sys.exit(1 if errors else 0)
+          PY
+
+  # ============================================================
+  # 1) VERSION — ortak, hep artan sürüm kodu (UTC dakika damgası)
+  #    run_number kullanılmaz: önceki/başka sürümlerin koduyla çakışıp Android'in "downgrade" reddine yol açabilir.
+  # ============================================================
+  version:
+    needs: preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    outputs:
+      version_name: ${{ steps.ver.outputs.name }}
+      version_code: ${{ steps.ver.outputs.code }}
+    steps:
+      - id: ver
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version_name }}
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            NAME="${GITHUB_REF_NAME#v}"
+          elif [[ -n "${INPUT_VERSION:-}" ]]; then
+            NAME="$INPUT_VERSION"
+          else
+            NAME="1.0.$(date -u +%y%m%d%H%M)"
+          fi
+          NAME="$(printf '%s' "$NAME" | tr -c 'A-Za-z0-9._-' '_')"
+          CODE="$(( $(date -u +%s) / 60 ))"
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "code=$CODE" >> "$GITHUB_OUTPUT"
+          echo "### 🏷️ Sürüm: \`$NAME\` (versionCode \`$CODE\`)" >> "$GITHUB_STEP_SUMMARY"
+
+  # ============================================================
+  # 2) BUILD — testler + debug APK (release'i BLOKE ETMEZ)
+  # ============================================================
+  build:
+    needs: version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      VERSION_NAME: ${{ needs.version.outputs.version_name }}
+      VERSION_CODE: ${{ needs.version.outputs.version_code }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v5
+        with:
+          gradle-version: ${{ env.GRADLE_VERSION }}
+
+      - name: "🧰 [build] Android SDK lisansları ve Gradle wrapper"
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null 2>&1 || true
+          if [ ! -f gradlew ]; then gradle wrapper --gradle-version "$GRADLE_VERSION"; fi
+          chmod +x gradlew
+          ./gradlew --version
+
+      - name: "🧰 [build] Sürüm numaralarını güncelle"
+        shell: bash
+        run: |
+          cp app/build.gradle.kts app/build.gradle.kts.orig
+          sed -i "s/^\(\s*\)versionCode = .*/\1versionCode = ${VERSION_CODE}/" app/build.gradle.kts
+          sed -i "s/^\(\s*\)versionName = .*/\1versionName = \"${VERSION_NAME}\"/" app/build.gradle.kts
+          grep -nE 'versionCode|versionName' app/build.gradle.kts
+          grep -q "versionCode = ${VERSION_CODE}" app/build.gradle.kts || { echo "::error::versionCode sed ile güncellenemedi (satır biçimi uyumsuz)."; exit 1; }
+          grep -q "versionName = \"${VERSION_NAME}\"" app/build.gradle.kts || { echo "::error::versionName sed ile güncellenemedi."; exit 1; }
+          diff -u app/build.gradle.kts.orig app/build.gradle.kts || true
+          rm -f app/build.gradle.kts.orig
+
+      # Testler AYRI adım + continue-on-error: kırmızı olsa bile debug APK üretilir; sonuç en sonda uygulanır.
+      - name: "🧪 [build] Birim testleri"
+        id: tests
+        shell: bash
+        continue-on-error: true
+        run: |
+          set +e                       # varsayılan -e, özet adımını atlatırdı; sonucu kendimiz yönetiriz
+          set -o pipefail
+          ./gradlew testDebugUnitTest --no-daemon --stacktrace --console=plain 2>&1 | tee unit-tests.log
+          rc=$?
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY" || true
+          import glob, xml.etree.ElementTree as ET
+          files = sorted(glob.glob("app/build/test-results/testDebugUnitTest/*.xml"))
+          total = failed = 0
+          lines = []
+          for f in files:
+              for case in ET.parse(f).getroot().iter("testcase"):
+                  total += 1
+                  for tag in ("failure", "error"):
+                      for e in case.findall(tag):
+                          failed += 1
+                          lines.append(f"- `{case.get('classname')}.{case.get('name')}`: {(e.get('message') or '').replace(chr(10), ' ')[:200]}")
+          if not files:
+              print("### 🧪 Birim testleri\n\nTest sonuç dosyası yok (test kodu derlenemedi olabilir; günlükteki `e:` satırlarına bakın).\n")
+          else:
+              print(f"### {'✅' if failed == 0 else '❌'} Birim testleri — toplam {total}, başarısız {failed}\n")
+              print("\n".join(lines) if lines else "Tüm testler geçti.")
+          PY
+          exit $rc
+
+      - name: "📦 [build] Debug APK derle"
+        shell: bash
+        run: |
+          set -o pipefail
+          ./gradlew assembleDebug --no-daemon --stacktrace --console=plain 2>&1 | tee debug-build.log
+
+      - name: "📦 [build] Debug APK'yı kopyala"
+        shell: bash
+        run: |
+          mkdir -p out
+          SRC=$(ls app/build/outputs/apk/debug/*.apk 2>/dev/null | head -1 || true)
+          if [ -z "$SRC" ]; then
+            echo "::error::Debug APK üretilmedi (app/build/outputs/apk/debug/ boş)."
+            ls -la app/build/outputs/apk/debug/ 2>/dev/null || echo "(klasör yok)"
+            exit 1
+          fi
+          cp "$SRC" "out/FinansTakip_V${VERSION_NAME}-debug.apk"
+          ls -lh out/
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: FinansTakip-v${{ needs.version.outputs.version_name }}-debug-apk
+          path: out/*.apk
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: "🩺 [build] Hata özeti"
+        if: failure()
+        shell: bash
+        run: |
+          {
+            echo "## ❌ Build hatası"
+            echo '```'
+            grep -nE "^e: |error:|FAILURE:|What went wrong|Caused by|Could not|Unresolved|Execution failed|Metadata|incompatible|> Task .* FAILED" \
+              unit-tests.log debug-build.log 2>/dev/null | head -80 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: "📤 [build] Günlükler ve test raporu"
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: build-diagnostics
+          path: |
+            unit-tests.log
+            debug-build.log
+            app/build/reports/tests/
+          retention-days: 14
+          if-no-files-found: ignore
+
+      # Test kırıksa iş KIRMIZI olmalı (APK yine de yüklendi).
+      - name: "🚦 [build] Test sonucunu uygula"
+        if: ${{ always() && steps.tests.outcome == 'failure' }}
+        shell: bash
+        run: |
+          echo "::error::Birim testleri başarısız: ayrıntı iş özetinde ve 'build-diagnostics' artifact'ında. Debug APK yine de üretildi."
+          exit 1
+
+  # ============================================================
+  # 3) RELEASE — imzalı APK (build'e bağlı değil; paralel)
+  # ============================================================
+  release:
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.release != 'false')
+    needs: [preflight, version]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: write          # yalnızca etiketli sürümde GitHub Release oluşturmak için
+    env:
+      VERSION_NAME: ${{ needs.version.outputs.version_name }}
+      VERSION_CODE: ${{ needs.version.outputs.version_code }}
+      # Parolalar BURAYA konmaz: yalnızca ihtiyaç duyan adımların env'ine verilir (üçüncü taraf adımlara sızmasın).
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: "🔎 [release] Teşhis — bu iş neden çalıştı?"
+        shell: bash
+        run: |
+          echo "event_name            : ${{ github.event_name }}"
+          echo "ref                   : ${{ github.ref }}"
+          echo "inputs.release        : ${{ github.event.inputs.release }}"
+          echo "inputs.minify         : ${{ github.event.inputs.minify || 'true (varsayılan)' }}"
+          echo "preflight.has_keystore: ${{ needs.preflight.outputs.has_keystore }}"
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v5
+        with:
+          gradle-version: ${{ env.GRADLE_VERSION }}
+
+      - name: "🧰 [release] Android SDK lisansları ve Gradle wrapper"
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null 2>&1 || true
+          if [ ! -f gradlew ]; then gradle wrapper --gradle-version "$GRADLE_VERSION"; fi
+          chmod +x gradlew
+          ./gradlew --version
+
+      - name: "🧰 [release] Sürüm numaralarını güncelle"
+        shell: bash
+        run: |
+          sed -i "s/^\(\s*\)versionCode = .*/\1versionCode = ${VERSION_CODE}/" app/build.gradle.kts
+          sed -i "s/^\(\s*\)versionName = .*/\1versionName = \"${VERSION_NAME}\"/" app/build.gradle.kts
+          grep -nE 'versionCode|versionName' app/build.gradle.kts
+          grep -q "versionCode = ${VERSION_CODE}" app/build.gradle.kts || { echo "::error::versionCode sed ile güncellenemedi"; exit 1; }
+          grep -q "versionName = \"${VERSION_NAME}\"" app/build.gradle.kts || { echo "::error::versionName sed ile güncellenemedi"; exit 1; }
+
+      # GITHUB_ENV'e yalnızca gizli OLMAYAN anahtar dosya yolu yazılır; parolalar asla.
+      - name: "🔐 [release] Keystore'u çöz ve doğrula"
+        id: keystore
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 || secrets.KFT_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD || secrets.KFT_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS || secrets.KFT_KEY_ALIAS }}
+        run: |
+          for v in KEYSTORE_BASE64 KEYSTORE_PASSWORD KEY_ALIAS; do
+            if [ -z "${!v:-}" ]; then
+              echo "::error::$v secret'ı tanımlı değil. Settings → Secrets and variables → Actions altında KEYSTORE_BASE64, KEYSTORE_PASSWORD, KEY_ALIAS, KEY_PASSWORD olmalı."
+              exit 1
+            fi
+          done
+          if ! printf '%s' "$KEYSTORE_BASE64" | tr -d '[:space:]' | base64 --decode > "$RUNNER_TEMP/release.jks" 2>/dev/null; then
+            echo "::error::KEYSTORE_BASE64 çözülemedi: değer .jks dosyasının base64 çıktısı olmalı (tek satır, boşluksuz; 'base64 -w0 dosya.jks')."
+            exit 1
+          fi
+          size=$(stat -c%s "$RUNNER_TEMP/release.jks")
+          echo "Çözülen keystore: $size bayt"
+          if [ "$size" -lt 100 ]; then
+            echo "::error::Çözülen keystore çok küçük ($size bayt): base64 değeri bozuk olabilir."
+            exit 1
+          fi
+          if ! keytool -list -keystore "$RUNNER_TEMP/release.jks" -storepass "$KEYSTORE_PASSWORD" -alias "$KEY_ALIAS" > /dev/null 2>&1; then
+            echo "::error::Keystore açılamadı veya '$KEY_ALIAS' alias'ı yok: KEYSTORE_PASSWORD ya da KEY_ALIAS hatalı."
+            exit 1
+          fi
+          echo "KEYSTORE_PATH=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+          echo "✅ Keystore ve '$KEY_ALIAS' alias'ı doğrulandı."
+
+      - name: "📦 [release] Release APK derle (R8)"
+        shell: bash
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD || secrets.KFT_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS || secrets.KFT_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD || secrets.KFT_KEY_PASSWORD }}
+        run: |
+          set -o pipefail
+          ./gradlew assembleRelease -Pkft.minify=${{ github.event.inputs.minify || 'true' }} \
+            --no-daemon --stacktrace --console=plain 2>&1 | tee release-build.log
+
+      - name: "🔐 [release] APK imzasını doğrula ve adlandır"
+        id: verify
+        shell: bash
+        env:
+          EXPECT_OWN_KEY: ${{ needs.preflight.outputs.has_keystore }}
+        run: |
+          set +e
+          APKSIGNER="$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)"
+          echo "apksigner: $APKSIGNER"
+          shopt -s nullglob
+          APKS=(app/build/outputs/apk/release/*.apk)
+          if [ ${#APKS[@]} -eq 0 ]; then
+            echo "::error::Release APK bulunamadı (app/build/outputs/apk/release/ boş). Klasör içeriği:"
+            ls -la app/build/outputs/apk/release/ 2>/dev/null || echo "(klasör yok)"
+            exit 1
+          fi
+          : > imza.txt
+          FAILED=0
+          for f in "${APKS[@]}"; do
+            echo "=== $f ==="
+            OUT="$("$APKSIGNER" verify --verbose --print-certs "$f" 2>&1)"
+            RC=$?
+            printf '%s\n' "$OUT" | tee -a imza.txt
+            if [ $RC -ne 0 ]; then FAILED=1; echo "::error::apksigner doğrulaması başarısız: $f (kod $RC)"; fi
+          done
+          [ $FAILED -eq 0 ] || exit 1
+          if grep -qi "Android Debug" imza.txt; then
+            if [ "$EXPECT_OWN_KEY" = "true" ]; then
+              echo "::error::APK debug anahtarıyla imzalanmış ama imza secret'ları tanımlı: app/build.gradle.kts signingConfigs bloğunu kontrol edin."
+              exit 1
+            fi
+            echo "::warning::Release APK debug anahtarıyla imzalandı."
+          else
+            echo "### ✅ RELEASE APK kendi anahtarınızla imzalı" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          {
+            grep -E "certificate DN:" imza.txt | sed -E 's/^[[:space:]]*/- /' || true
+            grep -E "certificate SHA-256 digest:" imza.txt | sed -E 's/^[[:space:]]*/- /' || true
+          } >> "$GITHUB_STEP_SUMMARY"
+          NEW="app/build/outputs/apk/release/FinansTakip_V${VERSION_NAME}.apk"
+          mv "${APKS[0]}" "$NEW"
+          echo "APK_PATH=$NEW" >> "$GITHUB_OUTPUT"
+          echo "APK_NAME=FinansTakip_V${VERSION_NAME}.apk" >> "$GITHUB_OUTPUT"
+
+      - name: "📤 [release] APK'yı yükle"
+        uses: actions/upload-artifact@v6
+        with:
+          name: FinansTakip-v${{ needs.version.outputs.version_name }}-release-apk
+          path: ${{ steps.verify.outputs.APK_PATH }}
+          retention-days: 90
+          if-no-files-found: error
+
+      - name: "📤 [release] R8 eşleme dosyası (çökme kayıtlarını çözmek için saklayın)"
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: mapping-v${{ needs.version.outputs.version_name }}
+          path: app/build/outputs/mapping/release/mapping.txt
+          retention-days: 90
+          if-no-files-found: ignore
+
+      - name: "🩺 [release] Hata özeti"
+        if: failure()
+        shell: bash
+        run: |
+          {
+            echo "## ❌ Release hatası"
+            echo '```'
+            grep -nE "^e: |error:|FAILURE:|What went wrong|Caused by|Could not|Unresolved|Execution failed|Metadata|incompatible|> Task .* FAILED|GradleException|Release imzası yok|Missing class" \
+              release-build.log 2>/dev/null | head -80 || true
+            echo '```'
+            if [ -f app/build/outputs/mapping/release/missing_rules.txt ]; then
+              echo "R8 eksik kurallar:"; echo '```'; head -40 app/build/outputs/mapping/release/missing_rules.txt; echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: "📤 [release] Günlükler"
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: release-diagnostics
+          path: |
+            release-build.log
+            imza.txt
+          retention-days: 14
+          if-no-files-found: ignore
+
+      # Üçüncü taraf eylem yok: runner'daki gh CLI ile (tedarik zinciri riski yok).
+      - name: "🚀 [release] GitHub Release (yalnızca v* etiketi)"
+        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APK_PATH: ${{ steps.verify.outputs.APK_PATH }}
+        run: |
+          tag="$GITHUB_REF_NAME"
+          if gh release view "$tag" > /dev/null 2>&1; then
+            gh release upload "$tag" "$APK_PATH" --clobber
+          else
+            gh release create "$tag" "$APK_PATH" --title "FinansTakip v$VERSION_NAME" --generate-notes
+          fi
+
+  # ============================================================
+  # 4) REPORT — hatayı Issue'ya yazar (log açmadan okunabilsin); her şey yeşilse Issue'yu kapatır
+  # ============================================================
+  report:
+    if: ${{ always() && github.event_name != 'pull_request' }}
+    needs: [preflight, version, build, release]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      issues: write
+      actions: read
+      contents: read
+    steps:
+      - name: "📮 CI durum raporu"
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          R_PREFLIGHT: ${{ needs.preflight.result }}
+          R_VERSION: ${{ needs.version.result }}
+          R_BUILD: ${{ needs.build.result }}
+          R_RELEASE: ${{ needs.release.result }}
+        run: |
+          set +e
+          title="🔴 CI hata raporu (otomatik)"
+          num="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"$title\" in:title" --json number --jq '.[0].number // empty' 2>/dev/null)"
+          failed=0
+          for r in "$R_PREFLIGHT" "$R_VERSION" "$R_BUILD" "$R_RELEASE"; do
+            [ "$r" = "failure" ] && failed=1
+          done
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          if [ "$failed" -eq 0 ]; then
+            if [ -n "$num" ]; then
+              gh issue comment "$num" --repo "$GITHUB_REPOSITORY" --body "✅ Son çalışma başarılı: $run_url (commit $GITHUB_SHA)" 
+              gh issue close "$num" --repo "$GITHUB_REPOSITORY" --reason completed
+            fi
+            exit 0
+          fi
+          # Başarısız işlerin adımlarını ve hata satırlarını (günlük API'sinden) topla
+          {
+            echo "Çalışma: $run_url"
+            echo "Commit: \`$GITHUB_SHA\` — dal/etiket: \`$GITHUB_REF_NAME\`"
+            echo ""
+            echo "| İş | Sonuç |"
+            echo "|---|---|"
+            echo "| preflight | $R_PREFLIGHT |"
+            echo "| version | $R_VERSION |"
+            echo "| build (testler + debug) | $R_BUILD |"
+            echo "| release | $R_RELEASE |"
+            echo ""
+            echo "### Başarısız adımlar"
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs" --paginate \
+              --jq '.jobs[] | select(.conclusion=="failure") | "- **" + .name + "**: " + ([.steps[] | select(.conclusion=="failure") | .name] | join(", "))' 2>/dev/null
+            echo ""
+            echo "_Ayrıntılı hata satırları ve test listesi çalışmanın **özet** sayfasında; günlükler **build-diagnostics** / **release-diagnostics** artifact'larındadır._"
+          } > rapor.md
+          if [ -n "$num" ]; then
+            gh issue comment "$num" --repo "$GITHUB_REPOSITORY" --body-file rapor.md
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body-file rapor.md
+          fi
+          exit 0
