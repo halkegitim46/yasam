@@ -7,7 +7,6 @@ plugins {
     alias(libs.plugins.hilt)
 }
 
-// İmza bilgileri ortam değişkenlerinden okunur.
 fun signingEnv(name: String): String? =
     (System.getenv(name) ?: System.getenv("KFT_$name"))?.takeIf { it.isNotBlank() }
 
@@ -15,7 +14,6 @@ val keystorePath: String? = signingEnv("KEYSTORE_PATH")
 
 android {
     namespace = "com.kisisel.finans"
-    // compileSdk 37: AGP 9.4'ün desteklediği en yüksek API. targetSdk 36 (Android 16) çalışma davranışını hedefler.
     compileSdk = 37
 
     defaultConfig {
@@ -71,6 +69,13 @@ android {
             isIncludeAndroidResources = true
             isReturnDefaultValues = true
         }
+        // Robolectric'in jar'ları Maven Central'dan indirmek yerine yerel dizinden okumasını sağla
+        unitTests.all {
+            it.systemProperty(
+                "robolectric.dependency.dir",
+                layout.buildDirectory.dir("robolectric-deps").get().asFile.absolutePath
+            )
+        }
     }
 
     packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
@@ -82,27 +87,20 @@ ksp {
     arg("room.schemaLocation", "$projectDir/schemas")
 }
 
+// Robolectric'in ihtiyaç duyduğu android-all-instrumented jar'ını taşımak için ayrı konfigürasyon
+val robolectricDeps: Configuration by configurations.creating
+
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime)
     implementation(libs.androidx.lifecycle.viewmodel)
     implementation(libs.androidx.activity.compose)
 
-    // Compose BOM: 2026.09.00 → Compose 1.12.1, compileSdk 37 ile uyumlu.
     implementation(platform(libs.compose.bom))
-    // Compose bileşenlerini açıkça BOM sürümüne sabitle, örtük yükseltmeyi (1.13.0) önle.
-    implementation("androidx.compose.ui:ui") {
-        version { strictly("1.12.1") }
-    }
-    implementation("androidx.compose.foundation:foundation") {
-        version { strictly("1.12.1") }
-    }
-    implementation("androidx.compose.foundation:foundation-layout") {
-        version { strictly("1.12.1") }
-    }
-    implementation("androidx.compose.animation:animation") {
-        version { strictly("1.12.1") }
-    }
+    implementation("androidx.compose.ui:ui") { version { strictly("1.12.1") } }
+    implementation("androidx.compose.foundation:foundation") { version { strictly("1.12.1") } }
+    implementation("androidx.compose.foundation:foundation-layout") { version { strictly("1.12.1") } }
+    implementation("androidx.compose.animation:animation") { version { strictly("1.12.1") } }
     implementation(libs.compose.material3)
     implementation(libs.compose.material.icons)
     debugImplementation(libs.compose.ui.tooling)
@@ -132,9 +130,21 @@ dependencies {
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.androidx.test.core)
     androidTestImplementation(libs.coroutines.android)
+
+    // Robolectric'in runtime'da indirmeye çalıştığı jar'ı Gradle bağımlılığı olarak tanımla
+    // Sürüm numarası, hata günlüğünüzdeki 14-robolectric-10818077-i7 ile eşleşmelidir
+    robolectricDeps("org.robolectric:android-all-instrumented:14-robolectric-10818077-i7")
 }
 
+// robolectricDeps konfigürasyonundaki jar'ları build/robolectric-deps dizinine kopyala
+val prepareRobolectricDeps by tasks.registering(Copy::class) {
+    from(robolectricDeps)
+    into(layout.buildDirectory.dir("robolectric-deps"))
+}
+
+// Tüm Test görevlerinin önce jar'ların kopyalanmasını beklemesini sağla
 tasks.withType<Test>().configureEach {
+    dependsOn(prepareRobolectricDeps)
     testLogging {
         events("failed")
         exceptionFormat = TestExceptionFormat.FULL
@@ -148,8 +158,7 @@ gradle.taskGraph.whenReady {
     }
     if (wantsRelease && keystorePath == null) {
         throw GradleException(
-            "Release imzası yok: KEYSTORE_PATH, KEYSTORE_PASSWORD, KEY_ALIAS ve KEY_PASSWORD ortam değişkenleri tanımlı olmalı " +
-                "(CI'da secrets'tan .github/scripts/prepare-signing.sh yazar; ayrıntı: README 'İmza anahtarı'). Debug için assembleDebug kullanın."
+            "Release imzası yok: KEYSTORE_PATH, KEYSTORE_PASSWORD, KEY_ALIAS ve KEY_PASSWORD ortam değişkenleri tanımlı olmalı."
         )
     }
 }
