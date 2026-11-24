@@ -121,6 +121,8 @@ jobs:
               m2 = re.search(r"release\((\d+)\)", kts)
               compile_sdk = int(m2.group(1)) if m2 else 0
 
+          mm0 = re.search(r"minorApiLevel\s*=\s*(\d+)", kts)
+          minor_sdk = int(mm0.group(1)) if mm0 else 0
           errors, warns = [], []
 
           # 1) KSP: eski biçim "<kotlin>-<ksp>" Kotlin ile eşleşmeli; KSP 2.3+ Kotlin'den bağımsızdır ama Kotlin >= 2.2 ister
@@ -170,7 +172,10 @@ jobs:
           if bomv >= (2026, 9) and compile_sdk < 37:
               errors.append(f"Compose BOM {bom} (Compose 1.12+) compileSdk 37 ve AGP 9 ister; compileSdk={compile_sdk}.")
           if bomv >= (2026, 11):
-              warns.append(f"Compose BOM {bom} (Compose 1.13 / Material3 1.5) compileSdk 37.1 ister: compileSdk {{ version = release(37) {{ minorApiLevel = 1 }} }}.")
+              mm = re.search(r"minorApiLevel\s*=\s*(\d+)", kts)
+              minor = int(mm.group(1)) if mm else 0
+              if not (compile_sdk >= 38 or (compile_sdk == 37 and minor >= 1)):
+                  errors.append(f"Compose BOM {bom} (Compose 1.13 / Material3 1.5) compileSdk 37.1 ister (şu an {compile_sdk}.{minor}): compileSdk {{ version = release(37) {{ minorApiLevel = 1 }} }}.")
 
           # 4) AGP ↔ Gradle alt sınırı
           table = [((9, 5), (9, 6, 0)), ((9, 0), (9, 1, 0)), ((8, 13), (8, 13, 0)), ((8, 12), (8, 13, 0)), ((8, 11), (8, 13, 0)),
@@ -187,7 +192,7 @@ jobs:
           if compile_sdk >= 36 and ver(agp) < (8, 9, 1):
               warns.append(f"compileSdk={compile_sdk} için AGP >= 8.9.1 önerilir (şu an {agp}).")
 
-          rows = [("Kotlin", kotlin), ("KSP", ksp), ("Hilt", hilt), ("Room", room), ("AGP", agp), ("Gradle (iş akışı)", gradle), ("Compose BOM", bom), ("compileSdk", str(compile_sdk))]
+          rows = [("Kotlin", kotlin), ("KSP", ksp), ("Hilt", hilt), ("Room", room), ("AGP", agp), ("Gradle (iş akışı)", gradle), ("Compose BOM", bom), ("compileSdk", f"{compile_sdk}.{minor_sdk}")]
           lines = ["## 🧩 Sürüm uyumluluğu", "", "| Bileşen | Sürüm |", "|---|---|"] + [f"| {a} | `{b}` |" for a, b in rows] + [""]
           lines += [f"- ❌ {e}" for e in errors] + [f"- ⚠️ {w}" for w in warns]
           if not errors and not warns:
@@ -284,6 +289,13 @@ jobs:
           set -o pipefail
           ./gradlew testDebugUnitTest --no-daemon --stacktrace --console=plain 2>&1 | tee unit-tests.log
           rc=$?
+          # Ağ kaynaklı geçici hata (Maven Central 429 / bağımlılık çözümleme): bir kez yeniden dene
+          if [ $rc -ne 0 ] && grep -qE "HTTP response code: 429|Could not resolve|Could not GET|Read timed out" unit-tests.log; then
+            echo "::warning::Ağ kaynaklı geçici hata algılandı; testler 45 sn sonra yeniden deneniyor."
+            sleep 45
+            ./gradlew testDebugUnitTest --no-daemon --stacktrace --console=plain 2>&1 | tee unit-tests-retry.log
+            rc=$?
+          fi
           python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY" || true
           import glob, xml.etree.ElementTree as ET
           files = sorted(glob.glob("app/build/test-results/testDebugUnitTest/*.xml"))
@@ -349,6 +361,7 @@ jobs:
           name: build-diagnostics
           path: |
             unit-tests.log
+            unit-tests-retry.log
             debug-build.log
             app/build/reports/tests/
           retention-days: 14

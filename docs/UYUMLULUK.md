@@ -14,7 +14,7 @@ Android derlemesinde en sık kırılma nedeni **birbirine bağlı sürümlerin a
 | Hilt / Dagger | **2.60.1** | ≥ 2.59 yalnızca AGP 9+ ile çalışır |
 | androidx.hilt | 1.3.0 | `hilt-lifecycle-viewmodel-compose` (`hiltViewModel` yeni paketi) |
 | Room | **2.8.5** | 2.x serisinin güncel sürümü (Room 3 ayrı bir geçiş) |
-| Compose BOM | **2026.09.00** | Compose 1.12.1 / Material 3 1.4.0; compileSdk 37 + AGP 9 ister |
+| Compose BOM | **2026.11.01** | Compose 1.13 / Material 3 1.5; **compileSdk 37.1** + AGP 9 ister |
 | Navigation | 2.10.2 | |
 | WorkManager | 2.12.0 | |
 | DataStore | 1.3.0 | |
@@ -22,13 +22,13 @@ Android derlemesinde en sık kırılma nedeni **birbirine bağlı sürümlerin a
 | Activity Compose | **1.13.0** | (1.14.0 henüz yalnızca alfa) |
 | Core KTX / Fragment | 1.19.1 / 1.9.1 | |
 | Coroutines | 1.11.0 | |
-| Robolectric | 4.17 | testler `sdk = [34]` ile koşar |
+| Robolectric | 4.17 | testler `sdk = [34]` ile koşar; android-all jar'ı Gradle ile çözülür (aşağıya bakın) |
 | SQLCipher | 4.6.1 (korundu) | 16 KB sayfa desteği belgeli; veri biçimi 4.x boyunca uyumlu. Güncelleme ayrı ve cihaz testiyle |
-| compileSdk / targetSdk / minSdk | **37 / 36 / 26** | targetSdk 36: Android 16 davranışları |
+| compileSdk / targetSdk / minSdk | **37.1 / 36 / 26** | targetSdk 36: Android 16 davranışları; compileSdk yalnızca derleme zamanı API'leri |
 
 ## Bilinçli sapmalar (neden "en yeni" değil)
 - **Gradle 9.9.x değil 9.7.1:** Kotlin Gradle eklentisi 2.4.21 en çok Gradle 9.7 ile test edilir; AGP 9.5'in alt sınırı 9.6'dır. Yeşil çıkınca 9.9.x ayrı bir adımda denenir.
-- **Compose BOM 2026.11.01 değil 2026.09.00:** 2026.11.01 (Compose 1.13 / Material 3 1.5) compileSdk **37.1** ister. Önce 37 ile çalışan küme doğrulanır.
+- **Compose BOM:** 2026.11.01 (Compose 1.13) kullanılır; bu BOM compileSdk **37.1** ister (`compileSdk { version = release(37) { minorApiLevel = 1 } }`). Sorun çıkarsa geri dönüş: BOM 2026.09.00 + compileSdk 37.
 - **Activity 1.14.0 değil 1.13.0**, **KSP 2.3.12 değil 2.3.14**: sürüm tablosundaki 1.14.0 yalnızca alfa; 2.3.14 en yeni kararlı KSP.
 - **Room 3 / Navigation 3 / AGP 10 hazırlığı:** ayrı, büyük geçişler; bu aşamaya alınmadı.
 
@@ -40,6 +40,7 @@ Android derlemesinde en sık kırılma nedeni **birbirine bağlı sürümlerin a
 5. `hiltViewModel` yeni pakete (`androidx.hilt.lifecycle.viewmodel.compose`); `TabRow`/`ScrollableTabRow` → `PrimaryTabRow`/`PrimaryScrollableTabRow` (Material 3 1.4 önerisi).
 6. Kullanılmayan `ui-tooling-preview` ve `room-testing` bağımlılıkları kaldırıldı.
 7. Gradle belleği 4 GB.
+8. **Robolectric android-all jar'ı Gradle ile çözülür**: `robolectricAndroidAll` yapılandırması + `prepareRobolectricDeps` (Sync) görevi + `robolectric.offline=true` / `robolectric.dependency.dir`. Robolectric yükseltilince `robolectricAndroidAll` sürümü (libs.versions.toml) birlikte güncellenir; sürüm, Robolectric'in test günlüğündeki `android-all-instrumented:<sürüm>` ile aynı olmalıdır.
 
 ## Android 16 (targetSdk 36) davranış kontrolü
 | Davranış | Durum |
@@ -64,6 +65,8 @@ Android derlemesinde en sık kırılma nedeni **birbirine bağlı sürümlerin a
 | `requires libraries ... compile against version 37 or later` | Kütüphane daha yeni compileSdk ister | compileSdk'i yükseltin (AGP desteği dahilinde) |
 | `Provided Metadata instance has version 2.4...` | Hilt/Dagger, Kotlin'den eski | Hilt ≥ 2.60 |
 | `'kotlin-android' ... built-in Kotlin` | AGP 9'da eski eklenti | `kotlin-android` eklentisini kaldırın |
+| `checkDebugAarMetadata` … `compile against version 37.1 or later` | Compose 1.13 (BOM 2026.11.01) compileSdk 37.1 ister | `compileSdk { version = release(37) { minorApiLevel = 1 } }` |
+| `Failed to fetch maven artifact … android-all-instrumented … HTTP response code: 429` | Robolectric jar'ı testte Maven Central'dan indirirken hız sınırı | android-all jar'ı Gradle ile çözülür (yukarıdaki madde 8); CI test adımı bir kez yeniden dener |
 | `tasks --all` Compose Preview görevinde hata (AGP 9.5) | AGP 9.5 hatası | `android.onlyEnableUnitTestForTheTestedBuildType=false` (gradle.properties) |
 
 ## Geri dönüş

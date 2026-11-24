@@ -7,6 +7,8 @@ plugins {
     alias(libs.plugins.hilt)
 }
 
+// İmza bilgileri ortam değişkenlerinden okunur. GÜNCEL adlar: KEYSTORE_PATH, KEYSTORE_PASSWORD, KEY_ALIAS, KEY_PASSWORD.
+// Geriye uyumluluk için eski KFT_ önekli adlar da kabul edilir (KFT_KEYSTORE_PATH, ...). Tek yerde tanımlı: ad karışıklığı olmasın.
 fun signingEnv(name: String): String? =
     (System.getenv(name) ?: System.getenv("KFT_$name"))?.takeIf { it.isNotBlank() }
 
@@ -14,7 +16,13 @@ val keystorePath: String? = signingEnv("KEYSTORE_PATH")
 
 android {
     namespace = "com.kisisel.finans"
-    compileSdk = 37
+    // compileSdk 37.1: Compose 1.13 (BOM 2026.11.01) en az 37.1 ister (checkDebugAarMetadata). targetSdk ayrıdır:
+    // 36 (Android 16) çalışma zamanı davranışını belirler; compileSdk yalnızca derleme zamanı API'leridir.
+    compileSdk {
+        version = release(37) {
+            minorApiLevel = 1
+        }
+    }
 
     defaultConfig {
         applicationId = "com.kisisel.finans"
@@ -23,9 +31,10 @@ android {
         versionCode = 1
         versionName = "0.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64") }
+        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64") }   // SQLCipher yerel kütüphaneleri
     }
 
+    // Sabit imza anahtarı (CI'da GitHub Secrets'tan gelir). Aynı anahtar = her sürüm eskisinin üstüne veri kaybı olmadan kurulur.
     signingConfigs {
         create("shared") {
             if (keystorePath != null) {
@@ -42,6 +51,7 @@ android {
             if (keystorePath != null) signingConfig = signingConfigs.getByName("shared")
         }
         release {
+            // R8 küçültme varsayılan açık; sorun çıkarsa -Pkft.minify=false ile kapatılabilir.
             val minify = (project.findProperty("kft.minify") as String?) != "false"
             isMinifyEnabled = minify
             isShrinkResources = minify
@@ -50,6 +60,7 @@ android {
         }
     }
 
+    // Lint raporu üretilir ama release derlemesini engellemez (ayrıntı: app/build/reports).
     lint {
         abortOnError = false
         checkReleaseBuilds = false
@@ -60,6 +71,7 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
+    // AGP 9 yeni DSL: resourceConfigurations yerine androidResources.localeFilters
     androidResources { localeFilters += "tr" }
 
     buildFeatures { compose = true }
@@ -69,19 +81,12 @@ android {
             isIncludeAndroidResources = true
             isReturnDefaultValues = true
         }
-        unitTests.all {
-            // Robolectric'in indirme kaynağını Google Maven ayna sunucusuna yönlendir, Maven Central 429 hız sınırlamasından kaçın
-            it.systemProperty(
-                "robolectric.dependency.repo.url",
-                "https://maven-central.storage-download.googleapis.com/maven2/"
-            )
-            it.systemProperty("robolectric.dependency.repo.id", "google-mirror")
-        }
     }
 
     packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
 }
 
+// AGP 9 yerleşik Kotlin: 'kotlin' uzantısı android {} bloğunun DIŞINDA tanımlanır.
 kotlin { jvmToolchain(17) }
 
 ksp {
@@ -95,10 +100,7 @@ dependencies {
     implementation(libs.androidx.activity.compose)
 
     implementation(platform(libs.compose.bom))
-    implementation("androidx.compose.ui:ui") { version { strictly("1.12.1") } }
-    implementation("androidx.compose.foundation:foundation") { version { strictly("1.12.1") } }
-    implementation("androidx.compose.foundation:foundation-layout") { version { strictly("1.12.1") } }
-    implementation("androidx.compose.animation:animation") { version { strictly("1.12.1") } }
+    implementation(libs.compose.ui)
     implementation(libs.compose.material3)
     implementation(libs.compose.material.icons)
     debugImplementation(libs.compose.ui.tooling)
@@ -124,12 +126,14 @@ dependencies {
     testImplementation(libs.robolectric)
     testImplementation(libs.androidx.test.core)
 
+    // Cihaz/emülatör testleri (gerçek SQLCipher ve Android Keystore): "Cihaz testleri" workflow'u veya connectedDebugAndroidTest
     androidTestImplementation(libs.androidx.test.ext.junit)
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.androidx.test.core)
     androidTestImplementation(libs.coroutines.android)
 }
 
+// Başarısız testlerin ayrıntısı (hata mesajı ve yığın) CI log'unda görünsün.
 tasks.withType<Test>().configureEach {
     testLogging {
         events("failed")
@@ -138,13 +142,37 @@ tasks.withType<Test>().configureEach {
     }
 }
 
+// Release derlemesi imza bilgisi olmadan sessizce "unsigned" APK üretmesin: açık bir hata ver.
 gradle.taskGraph.whenReady {
     val wantsRelease = allTasks.any { t ->
         t.project == project && (t.name == "assembleRelease" || t.name == "bundleRelease" || t.name == "packageRelease")
     }
     if (wantsRelease && keystorePath == null) {
         throw GradleException(
-            "Release imzası yok: KEYSTORE_PATH, KEYSTORE_PASSWORD, KEY_ALIAS ve KEY_PASSWORD ortam değişkenleri tanımlı olmalı."
+            "Release imzası yok: KEYSTORE_PATH, KEYSTORE_PASSWORD, KEY_ALIAS ve KEY_PASSWORD ortam değişkenleri tanımlı olmalı " +
+                "(CI'da secrets'tan .github/scripts/prepare-signing.sh yazar; ayrıntı: README 'İmza anahtarı'). Debug için assembleDebug kullanın."
         )
     }
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Robolectric: SDK 34 (Android 14) çalışma zamanı jar'ı Gradle ile çözülür (önbellekli, yeniden denemeli).
+// Aksi halde Robolectric testte jar'ı Maven Central'dan kendisi indirir; GitHub runner'larında "HTTP 429 Too Many Requests"
+// ile 14 test sınıfı düşüyordu. Robolectric yükseltilince libs.versions.toml'daki robolectricAndroidAll da güncellenmelidir.
+// ---------------------------------------------------------------------------------------------------------------------
+val robolectricAndroidAll by configurations.creating
+
+dependencies {
+    robolectricAndroidAll(libs.robolectric.android.all)
+}
+
+val prepareRobolectricDeps by tasks.registering(Sync::class) {
+    from(robolectricAndroidAll)
+    into(layout.buildDirectory.dir("robolectric-deps"))
+}
+
+tasks.withType<Test>().configureEach {
+    dependsOn(prepareRobolectricDeps)
+    systemProperty("robolectric.offline", "true")
+    systemProperty("robolectric.dependency.dir", layout.buildDirectory.dir("robolectric-deps").get().asFile.absolutePath)
 }

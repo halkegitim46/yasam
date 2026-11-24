@@ -32,7 +32,7 @@ ama işi kırmızı yapar. Hata olursa "Başarısız testleri özetle" adımı k
 
 Yerelde: AGP 9.5'i destekleyen güncel Android Studio'da klasörü açın (JDK 17), `app` modülünü çalıştırın. Testler: `./gradlew testDebugUnitTest` (Gradle 9.7.1; wrapper yoksa `gradle wrapper --gradle-version 9.7.1`).
 
-**Teknoloji yığını (Kasım 2026):** AGP 9.5.2 (yerleşik Kotlin, yeni DSL), Gradle 9.7.1, Kotlin 2.4.21, KSP 2.3.14, Hilt 2.60.1, Room 2.8.5, Compose BOM 2026.09.00 (Compose 1.12 / Material 3 1.4), Navigation 2.10.2, WorkManager 2.12.0, DataStore 1.3.0, Lifecycle 2.11.1, `compileSdk 37`, `targetSdk 36` (Android 16), `minSdk 26`. Uyumluluk kuralları ve yükseltme yöntemi: `docs/UYUMLULUK.md`.
+**Teknoloji yığını (Kasım 2026):** AGP 9.5.2 (yerleşik Kotlin, yeni DSL), Gradle 9.7.1, Kotlin 2.4.21, KSP 2.3.14, Hilt 2.60.1, Room 2.8.5, Compose BOM 2026.11.01 (Compose 1.13 / Material 3 1.5), Navigation 2.10.2, WorkManager 2.12.0, DataStore 1.3.0, Lifecycle 2.11.1, `compileSdk 37.1`, `targetSdk 36` (Android 16), `minSdk 26`. Uyumluluk kuralları ve yükseltme yöntemi: `docs/UYUMLULUK.md`.
 
 > **Veritabanı şema sürümü 3** (2: ajanda, 3: şifre kasası). Mevcut kurulumlar açılışta otomatik ve veri kaybı olmadan yükseltilir (`MigrationV2Test`, `MigrationV3Test`).
 > Eski (sürüm 1) yedekler yeni sürümde geri yüklenebilir; yeni sürüm yedekleri eski uygulama sürümünde açılmaz (güncelleme istenir).
