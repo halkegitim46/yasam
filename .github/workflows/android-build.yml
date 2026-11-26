@@ -279,6 +279,59 @@ jobs:
           diff -u app/build.gradle.kts.orig app/build.gradle.kts || true
           rm -f app/build.gradle.kts.orig
 
+      # Robolectric'in Android 14 jar'ı (~100 MB) Maven Central'dan testte indirilince GitHub runner'larında sık sık HTTP 429 alır.
+      # Burada: önbellek → Google'ın Maven Central yansıması → Maven Central sırasıyla, yeniden deneme + SHA-1 doğrulamasıyla indirilir.
+      - name: "🧰 [build] Robolectric jar sürümü"
+        id: robo
+        shell: bash
+        run: |
+          ver="$(grep -E '^robolectricAndroidAll' gradle/libs.versions.toml | sed -E 's/.*"([^"]+)".*/\1/')"
+          [ -n "$ver" ] || { echo "::error::libs.versions.toml içinde robolectricAndroidAll bulunamadı"; exit 1; }
+          echo "ver=$ver" >> "$GITHUB_OUTPUT"
+          echo "Robolectric android-all sürümü: $ver"
+
+      - name: "🧰 [build] Robolectric jar önbelleği (geri yükle)"
+        uses: actions/cache/restore@v4
+        with:
+          path: app/build/robolectric-deps
+          key: robolectric-android-all-${{ steps.robo.outputs.ver }}
+
+      - name: "🧰 [build] Robolectric jar'ını indir (yansıma + yeniden deneme)"
+        shell: bash
+        env:
+          VER: ${{ steps.robo.outputs.ver }}
+        run: |
+          set +e
+          dir="app/build/robolectric-deps"
+          file="android-all-instrumented-${VER}.jar"
+          mkdir -p "$dir"
+          if [ -s "$dir/$file" ]; then echo "Önbellekten alındı: $dir/$file"; exit 0; fi
+          path="org/robolectric/android-all-instrumented/${VER}/${file}"
+          for base in \
+            "https://maven-central.storage-download.googleapis.com/maven2" \
+            "https://repo1.maven.org/maven2" \
+            "https://repo.maven.apache.org/maven2"; do
+            for attempt in 1 2 3 4; do
+              echo "İndiriliyor ($attempt/4): $base"
+              if curl -fsSL --retry 2 --retry-delay 5 -o "$dir/$file.tmp" "$base/$path"; then
+                want="$(curl -fsSL "$base/$path.sha1" 2>/dev/null | cut -d' ' -f1)"
+                have="$(sha1sum "$dir/$file.tmp" | cut -d' ' -f1)"
+                if [ -n "$want" ] && [ "$want" != "$have" ]; then
+                  echo "::warning::SHA-1 uyuşmuyor ($base); dosya silindi, yeniden deneniyor."
+                  rm -f "$dir/$file.tmp"
+                else
+                  mv "$dir/$file.tmp" "$dir/$file"
+                  echo "✅ İndirildi: $dir/$file ($(du -h "$dir/$file" | cut -f1))"
+                  exit 0
+                fi
+              fi
+              sleep $(( attempt * 15 ))
+            done
+          done
+          rm -f "$dir/$file.tmp"
+          echo "::warning::Robolectric jar'ı indirilemedi; testler jar'ı kendisi indirmeyi deneyecek (429 riski)."
+          exit 0
+
       # Testler AYRI adım + continue-on-error: kırmızı olsa bile debug APK üretilir; sonuç en sonda uygulanır.
       - name: "🧪 [build] Birim testleri"
         id: tests
@@ -315,6 +368,13 @@ jobs:
               print("\n".join(lines) if lines else "Tüm testler geçti.")
           PY
           exit $rc
+
+      - name: "🧰 [build] Robolectric jar önbelleği (kaydet)"
+        if: ${{ always() && hashFiles('app/build/robolectric-deps/*.jar') != '' }}
+        uses: actions/cache/save@v4
+        with:
+          path: app/build/robolectric-deps
+          key: robolectric-android-all-${{ steps.robo.outputs.ver }}
 
       - name: "📦 [build] Debug APK derle"
         shell: bash

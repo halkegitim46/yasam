@@ -22,7 +22,7 @@ Android derlemesinde en sık kırılma nedeni **birbirine bağlı sürümlerin a
 | Activity Compose | **1.13.0** | (1.14.0 henüz yalnızca alfa) |
 | Core KTX / Fragment | 1.19.1 / 1.9.1 | |
 | Coroutines | 1.11.0 | |
-| Robolectric | 4.17 | testler `sdk = [34]` ile koşar; android-all jar'ı Gradle ile çözülür (aşağıya bakın) |
+| Robolectric | 4.17 | testler `sdk = [34]` ile koşar; android-all jar'ı CI'da önceden indirilir (aşağıya bakın) |
 | SQLCipher | 4.6.1 (korundu) | 16 KB sayfa desteği belgeli; veri biçimi 4.x boyunca uyumlu. Güncelleme ayrı ve cihaz testiyle |
 | compileSdk / targetSdk / minSdk | **37.1 / 36 / 26** | targetSdk 36: Android 16 davranışları; compileSdk yalnızca derleme zamanı API'leri |
 
@@ -40,7 +40,7 @@ Android derlemesinde en sık kırılma nedeni **birbirine bağlı sürümlerin a
 5. `hiltViewModel` yeni pakete (`androidx.hilt.lifecycle.viewmodel.compose`); `TabRow`/`ScrollableTabRow` → `PrimaryTabRow`/`PrimaryScrollableTabRow` (Material 3 1.4 önerisi).
 6. Kullanılmayan `ui-tooling-preview` ve `room-testing` bağımlılıkları kaldırıldı.
 7. Gradle belleği 4 GB.
-8. **Robolectric android-all jar'ı Gradle ile çözülür**: `robolectricAndroidAll` yapılandırması + `prepareRobolectricDeps` (Sync) görevi + `robolectric.offline=true` / `robolectric.dependency.dir`. Robolectric yükseltilince `robolectricAndroidAll` sürümü (libs.versions.toml) birlikte güncellenir; sürüm, Robolectric'in test günlüğündeki `android-all-instrumented:<sürüm>` ile aynı olmalıdır.
+8. **Robolectric android-all jar'ı CI'da önceden indirilir**: Maven Central, GitHub runner'larına `HTTP 429` verip (Gradle'ın kendi indirmesi dahil) testleri düşürüyordu. CI sırasıyla önbelleği, Google'ın Maven Central yansımasını ve Maven Central'ı dener (yeniden deneme + SHA-1 doğrulaması) ve jar'ı `app/build/robolectric-deps` altına koyar; `build.gradle.kts` jar varsa Robolectric'i çevrimdışı çalıştırır, yoksa (yerel geliştirme) Robolectric kendisi indirir. Robolectric yükseltilince `libs.versions.toml` içindeki `robolectricAndroidAll` sürümü de güncellenmelidir (Robolectric günlüğündeki `android-all-instrumented:<sürüm>` ile aynı olmalı).
 
 ## Android 16 (targetSdk 36) davranış kontrolü
 | Davranış | Durum |
@@ -66,7 +66,7 @@ Android derlemesinde en sık kırılma nedeni **birbirine bağlı sürümlerin a
 | `Provided Metadata instance has version 2.4...` | Hilt/Dagger, Kotlin'den eski | Hilt ≥ 2.60 |
 | `'kotlin-android' ... built-in Kotlin` | AGP 9'da eski eklenti | `kotlin-android` eklentisini kaldırın |
 | `checkDebugAarMetadata` … `compile against version 37.1 or later` | Compose 1.13 (BOM 2026.11.01) compileSdk 37.1 ister | `compileSdk { version = release(37) { minorApiLevel = 1 } }` |
-| `Failed to fetch maven artifact … android-all-instrumented … HTTP response code: 429` | Robolectric jar'ı testte Maven Central'dan indirirken hız sınırı | android-all jar'ı Gradle ile çözülür (yukarıdaki madde 8); CI test adımı bir kez yeniden dener |
+| `Failed to fetch maven artifact … android-all-instrumented … HTTP response code: 429` | Robolectric jar'ı testte Maven Central'dan indirirken hız sınırı | CI jar'ı yansıma + yeniden deneme + önbellekle önceden indirir (yukarıdaki madde 8); test adımı ayrıca bir kez yeniden dener |
 | `tasks --all` Compose Preview görevinde hata (AGP 9.5) | AGP 9.5 hatası | `android.onlyEnableUnitTestForTheTestedBuildType=false` (gradle.properties) |
 
 ## Geri dönüş

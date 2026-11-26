@@ -8,7 +8,7 @@
 #  5) Compose 1.12+ (BOM 2026.09+): compileSdk 37 ve AGP 9 ister. BOM 2026.11.01 (Compose 1.13, Material3 1.5): compileSdk 37.1
 #     (compileSdk { version = release(37) { minorApiLevel = 1 } }); aksi halde checkDebugAarMetadata başarısız olur.
 #  6) targetSdk 36 (Android 16), compileSdk 37.1 (AGP 9.5'in desteklediği en yüksek API ailesi).
-#  7) Robolectric android-all jar'ı Gradle ile çözülür (app/build.gradle.kts): CI'da Maven Central 429 hatasını önler.
+#  7) Robolectric android-all jar'ı CI'da testten önce indirilir (yansıma + yeniden deneme + önbellek); Maven Central 429 hatasını önler.
 # Geri dönüş (Aşama A, CI'da doğrulanacak ara küme): agp 8.13.2, kotlin 2.2.21, ksp 2.3.14, hilt 2.58, room 2.8.4, Gradle 8.13.
 # Son CI'da kanıtlı eski küme: agp 8.7.3, kotlin 2.0.21, ksp 2.0.21-1.0.28, hilt 2.52, room 2.6.1, Gradle 8.9.
 # Ayrıntı: docs/UYUMLULUK.md
@@ -33,6 +33,7 @@ fragment = "1.9.1"
 junit = "4.13.2"
 robolectric = "4.17"
 # Robolectric 4.17 için SDK 34 (Android 14) çalışma zamanı jar sürümü; Robolectric yükseltilince BİRLİKTE güncellenir.
+# CI bu jar'ı testten önce yeniden denemeli/yansıtmalı indirir ve önbelleğe alır (Maven Central 429 hız sınırı).
 robolectricAndroidAll = "14-robolectric-10818077-i7"
 sqlcipher = "4.6.1"
 androidxTestExtJunit = "1.2.1"
@@ -64,7 +65,6 @@ coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-androi
 coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "coroutines" }
 junit = { module = "junit:junit", version.ref = "junit" }
 robolectric = { module = "org.robolectric:robolectric", version.ref = "robolectric" }
-robolectric-android-all = { module = "org.robolectric:android-all-instrumented", version.ref = "robolectricAndroidAll" }
 androidx-test-core = { module = "androidx.test:core-ktx", version.ref = "androidxTest" }
 androidx-test-ext-junit = { module = "androidx.test.ext:junit", version.ref = "androidxTestExtJunit" }
 androidx-test-runner = { module = "androidx.test:runner", version.ref = "androidxTestRunner" }

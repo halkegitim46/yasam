@@ -156,23 +156,17 @@ gradle.taskGraph.whenReady {
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
-// Robolectric: SDK 34 (Android 14) çalışma zamanı jar'ı Gradle ile çözülür (önbellekli, yeniden denemeli).
-// Aksi halde Robolectric testte jar'ı Maven Central'dan kendisi indirir; GitHub runner'larında "HTTP 429 Too Many Requests"
-// ile 14 test sınıfı düşüyordu. Robolectric yükseltilince libs.versions.toml'daki robolectricAndroidAll da güncellenmelidir.
+// Robolectric: SDK 34 (Android 14) çalışma zamanı jar'ı (~100 MB) varsa ÇEVRİMDIŞI kullanılır.
+// CI, jar'ı testten önce app/build/robolectric-deps içine indirir (yansıma + yeniden deneme + önbellek); GitHub runner'larında
+// Maven Central "HTTP 429 Too Many Requests" verip testleri düşürüyordu. Jar yoksa (yerel geliştirme) Robolectric kendisi indirir.
+// Robolectric yükseltilince libs.versions.toml'daki robolectricAndroidAll da güncellenmelidir.
 // ---------------------------------------------------------------------------------------------------------------------
-val robolectricAndroidAll by configurations.creating
-
-dependencies {
-    robolectricAndroidAll(libs.robolectric.android.all)
-}
-
-val prepareRobolectricDeps by tasks.registering(Sync::class) {
-    from(robolectricAndroidAll)
-    into(layout.buildDirectory.dir("robolectric-deps"))
-}
+val robolectricDepsDir = layout.buildDirectory.dir("robolectric-deps").get().asFile
+val robolectricJar = robolectricDepsDir.resolve("android-all-instrumented-${libs.versions.robolectricAndroidAll.get()}.jar")
 
 tasks.withType<Test>().configureEach {
-    dependsOn(prepareRobolectricDeps)
-    systemProperty("robolectric.offline", "true")
-    systemProperty("robolectric.dependency.dir", layout.buildDirectory.dir("robolectric-deps").get().asFile.absolutePath)
+    if (robolectricJar.exists()) {
+        systemProperty("robolectric.offline", "true")
+        systemProperty("robolectric.dependency.dir", robolectricDepsDir.absolutePath)
+    }
 }
