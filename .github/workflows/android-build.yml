@@ -291,7 +291,7 @@ jobs:
           echo "Robolectric android-all sürümü: $ver"
 
       - name: "🧰 [build] Robolectric jar önbelleği (geri yükle)"
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: app/build/robolectric-deps
           key: robolectric-android-all-${{ steps.robo.outputs.ver }}
@@ -371,7 +371,7 @@ jobs:
 
       - name: "🧰 [build] Robolectric jar önbelleği (kaydet)"
         if: ${{ always() && hashFiles('app/build/robolectric-deps/*.jar') != '' }}
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: app/build/robolectric-deps
           key: robolectric-android-all-${{ steps.robo.outputs.ver }}
