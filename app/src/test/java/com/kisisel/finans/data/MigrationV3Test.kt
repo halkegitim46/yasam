@@ -50,6 +50,7 @@ class MigrationV3Test {
         db.close()
 
         val raw = SQLiteDatabase.openDatabase(context.getDatabasePath(name).path, null, SQLiteDatabase.OPEN_READWRITE)
+        raw.execSQL("DROP TABLE vault_history")
         raw.execSQL("DROP TABLE vault_items")
         raw.execSQL("PRAGMA user_version = 2")
         raw.close()

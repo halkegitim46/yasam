@@ -17,6 +17,7 @@ import com.kisisel.finans.data.local.entity.InvoiceTemplateEntity
 import com.kisisel.finans.data.local.entity.PaymentEntity
 import com.kisisel.finans.data.local.entity.PersonEntity
 import com.kisisel.finans.data.local.entity.TransactionEntity
+import com.kisisel.finans.data.local.entity.VaultHistoryEntity
 import com.kisisel.finans.data.local.entity.VaultItemEntity
 
 @Database(
@@ -28,7 +29,8 @@ import com.kisisel.finans.data.local.entity.VaultItemEntity
         PaymentEntity::class,
         AppSettingEntity::class,
         AgendaItemEntity::class,
-        VaultItemEntity::class
+        VaultItemEntity::class,
+        VaultHistoryEntity::class
     ],
     version = KisiselFinansDatabase.VERSION,
     exportSchema = true
@@ -48,6 +50,6 @@ abstract class KisiselFinansDatabase : RoomDatabase() {
         const val NAME = "kisisel_finans.db"
 
         /** Room şema sürümü; yedek dosyalarının uyumluluk kontrolünde de kullanılır. */
-        const val VERSION = 3
+        const val VERSION = 4
     }
 }

@@ -8,6 +8,7 @@ import com.kisisel.finans.data.local.entity.InvoiceTemplateEntity
 import com.kisisel.finans.data.local.entity.PaymentEntity
 import com.kisisel.finans.data.local.entity.PersonEntity
 import com.kisisel.finans.data.local.entity.TransactionEntity
+import com.kisisel.finans.data.local.entity.VaultHistoryEntity
 import com.kisisel.finans.data.local.entity.VaultItemEntity
 
 data class DatabaseSnapshot(
@@ -20,11 +21,13 @@ data class DatabaseSnapshot(
     /** Sürüm 2 ile eklendi; eski yedeklerde boş. Varsayılan değer, eski çağrıların derlenmesini korur. */
     val agendaItems: List<AgendaItemEntity> = emptyList(),
     /** Sürüm 3 ile eklendi; eski yedeklerde boş. */
-    val vaultItems: List<VaultItemEntity> = emptyList()
+    val vaultItems: List<VaultItemEntity> = emptyList(),
+    /** Sürüm 4 ile eklendi; eski yedeklerde boş. */
+    val vaultHistory: List<VaultHistoryEntity> = emptyList()
 ) {
     val totalRows: Int
         get() = persons.size + invoiceTemplates.size + invoiceOccurrences.size +
-            transactions.size + payments.size + settings.size + agendaItems.size + vaultItems.size
+            transactions.size + payments.size + settings.size + agendaItems.size + vaultItems.size + vaultHistory.size
 }
 
 /** Veritabanının tam, tutarlı kopyası: dışa aktarma ve (kimlikler korunarak) içe aktarma. */
@@ -40,7 +43,8 @@ object DatabaseSnapshotter {
             payments = d.payments(),
             settings = d.settings(),
             agendaItems = d.agendaItems(),
-            vaultItems = d.vaultItems()
+            vaultItems = d.vaultItems(),
+            vaultHistory = d.vaultHistory()
         )
     }
 
@@ -60,6 +64,7 @@ object DatabaseSnapshotter {
             d.insertPayments(s.payments)
             d.insertAgendaItems(s.agendaItems)
             d.insertVaultItems(s.vaultItems)
+            d.insertVaultHistory(s.vaultHistory)
             d.insertSettings(s.settings)
         }
     }
@@ -73,6 +78,7 @@ object DatabaseSnapshotter {
         db.withTransaction {
             val d = db.snapshotDao()
             d.deleteAgendaItems()
+            d.deleteVaultHistory()
             d.deleteVaultItems()
             d.deletePayments()
             d.deleteTransactions()

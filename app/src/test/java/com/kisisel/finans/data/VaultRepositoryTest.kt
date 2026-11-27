@@ -29,6 +29,7 @@ import org.robolectric.annotation.Config
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneId
+import com.kisisel.finans.domain.model.VaultSecretHistory
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], application = android.app.Application::class)
@@ -145,6 +146,94 @@ class VaultRepositoryTest {
             DatabaseSnapshotter.import(other, parsed.snapshot)
             assertEquals(snapshot, DatabaseSnapshotter.export(other))
             DatabaseSnapshotter.replaceAll(other, parsed.snapshot)
+            assertEquals(snapshot, DatabaseSnapshotter.export(other))
+        } finally {
+            other.close()
+        }
+    }
+
+    // ---------------- şifre geçmişi ----------------
+    private suspend fun change(id: Long, secret: String, title: String = "Banka") =
+        vault.update(VaultUpdate(id, title, "ali", secret, "", ""))
+
+    @Test fun changingPasswordMovesTheOldOneToHistory() = runDb {
+        val id = vault.create(item(secret = "ilk"))
+        change(id, "ikinci")
+        val history = vault.getHistory(id)
+        assertEquals(listOf("ilk"), history.map { it.secret })
+        assertEquals("ikinci", vault.getById(id)!!.secret)
+        assertEquals(clock.millis(), history.single().changedAt)
+    }
+
+    @Test fun onlyTheLastThreeOldPasswordsAreKeptNewestFirst() = runDb {
+        val id = vault.create(item(secret = "s0"))
+        for (n in 1..5) change(id, "s$n")                       // s0..s4 eski, s5 güncel
+        assertEquals(listOf("s4", "s3", "s2"), vault.getHistory(id).map { it.secret })
+        assertEquals("s5", vault.getById(id)!!.secret)
+        assertEquals(3, DatabaseSnapshotter.export(db).vaultHistory.size)   // fazlası fiziksel olarak silinir
+    }
+
+    @Test fun editingOtherFieldsOrSameSecretDoesNotTouchHistory() = runDb {
+        val id = vault.create(item(secret = "ayni"))
+        change(id, "ayni", title = "Yeni başlık")
+        vault.update(VaultUpdate(id, "Yeni başlık", "veli", "ayni", "https://x", "not"))
+        assertEquals(emptyList<VaultSecretHistory>(), vault.getHistory(id))
+    }
+
+    @Test fun historyIsKeptPerItem() = runDb {
+        val a = vault.create(item("A", secret = "a1"))
+        val b = vault.create(item("B", secret = "b1"))
+        change(a, "a2", "A"); change(a, "a3", "A"); change(b, "b2", "B")
+        assertEquals(listOf("a2", "a1"), vault.getHistory(a).map { it.secret })
+        assertEquals(listOf("b1"), vault.getHistory(b).map { it.secret })
+    }
+
+    @Test fun oldPasswordsKeepExactValueIncludingSpaces() = runDb {
+        val id = vault.create(item(secret = " bosluklu \"sifre\" ü "))
+        UpdateVaultItemUseCase(vault)(VaultUpdate(id, "Banka", "ali", "yeni", "", ""))
+        assertEquals(" bosluklu \"sifre\" ü ", vault.getHistory(id).single().secret)
+    }
+
+    @Test fun observeHistoryEmitsAfterChange() = runDb {
+        val id = vault.create(item(secret = "bir"))
+        assertEquals(0, vault.observeHistory(id).first().size)
+        change(id, "iki")
+        assertEquals(listOf("bir"), vault.observeHistory(id).first().map { it.secret })
+    }
+
+    @Test fun archivedItemKeepsItsHistoryInTheSnapshot() = runDb {
+        val id = vault.create(item(secret = "bir"))
+        change(id, "iki")
+        vault.archive(id)
+        assertEquals(1, DatabaseSnapshotter.export(db).vaultHistory.size)   // arşivlenen kaydın geçmişi yedekte korunur
+    }
+
+    @Test fun updatingAMissingItemLeavesNoHistory() = runDb {
+        assertTrue(runCatching { change(999, "x") }.exceptionOrNull() is FinanceException.VaultItemNotFound)
+        assertEquals(0, DatabaseSnapshotter.export(db).vaultHistory.size)
+    }
+
+    @Test fun historyToStringNeverLeaksTheSecret() = runDb {
+        val id = vault.create(item(secret = "EskiSifre-123"))
+        change(id, "yeni")
+        assertFalse(vault.getHistory(id).single().toString().contains("EskiSifre-123"))
+    }
+
+    @Test fun historySurvivesBackupCodecAndRestore() = runDb {
+        val id = vault.create(item(secret = "s0"))
+        for (n in 1..4) change(id, "s$n")
+        val snapshot = DatabaseSnapshotter.export(db)
+        assertEquals(emptyList<String>(), BackupSnapshotValidator.validate(snapshot))
+        val parsed = BackupCodec.decode(BackupCodec.encode(snapshot, 1))
+        assertEquals(snapshot, parsed.snapshot)
+        assertEquals(3, parsed.meta.counts["vaultHistory"])
+
+        val ctx = ApplicationProvider.getApplicationContext<Context>()
+        val other = Room.inMemoryDatabaseBuilder(ctx, KisiselFinansDatabase::class.java).allowMainThreadQueries().build()
+        try {
+            DatabaseSnapshotter.import(other, parsed.snapshot)
+            assertEquals(snapshot, DatabaseSnapshotter.export(other))
+            DatabaseSnapshotter.replaceAll(other, parsed.snapshot)          // geçmiş → kayıt silme sırası (yabancı anahtar)
             assertEquals(snapshot, DatabaseSnapshotter.export(other))
         } finally {
             other.close()

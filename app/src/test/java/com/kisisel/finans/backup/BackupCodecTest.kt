@@ -27,6 +27,7 @@ import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.util.zip.GZIPInputStream
 import java.util.zip.GZIPOutputStream
+import com.kisisel.finans.data.local.entity.VaultHistoryEntity
 
 /** org.json gerçek uygulaması gerektiği için Robolectric ile çalışır. */
 @RunWith(RobolectricTestRunner::class)
@@ -201,6 +202,34 @@ class BackupCodecTest {
     @Test fun version3BackupMissingVaultTableIsRejected() {
         val json = gunzipJson(BackupCodec.encode(snapshot, 1))
         json.remove("vaultItems")
+        invalid(gzip(json))
+    }
+
+    @Test fun vaultHistoryRoundTrip() {
+        val withHistory = snapshot.copy(
+            vaultItems = listOf(VaultItemEntity(1, "Banka", "ali", "yeni", "", "", false, 1, 2)),
+            vaultHistory = listOf(
+                VaultHistoryEntity(1, 1, "eski \"1\" ü ğ", 10),
+                VaultHistoryEntity(2, 1, "daha eski", 5)
+            )
+        )
+        val parsed = BackupCodec.decode(BackupCodec.encode(withHistory, 1))
+        assertEquals(withHistory, parsed.snapshot)
+        assertEquals(2, parsed.meta.counts["vaultHistory"])
+    }
+
+    @Test fun version3BackupWithoutHistoryStillDecodes() {
+        val json = gunzipJson(BackupCodec.encode(snapshot, 1))
+        json.put("dbVersion", 3)
+        json.remove("vaultHistory")
+        json.getJSONObject("counts").remove("vaultHistory")
+        val parsed = BackupCodec.decode(gzip(json))
+        assertEquals(emptyList<VaultHistoryEntity>(), parsed.snapshot.vaultHistory)
+    }
+
+    @Test fun version4BackupMissingHistoryTableIsRejected() {
+        val json = gunzipJson(BackupCodec.encode(snapshot, 1))
+        json.remove("vaultHistory")
         invalid(gzip(json))
     }
 }

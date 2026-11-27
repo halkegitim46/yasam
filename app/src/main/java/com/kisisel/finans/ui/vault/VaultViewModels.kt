@@ -25,6 +25,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 import com.kisisel.finans.core.TurkishLocale
+import com.kisisel.finans.domain.model.VaultSecretHistory
 
 
 // ---------------- liste ----------------
@@ -59,7 +60,13 @@ class VaultListViewModel @Inject constructor(
 }
 
 // ---------------- ayrıntı ----------------
-data class VaultItemState(val loading: Boolean = true, val item: VaultItem? = null, val error: String? = null)
+data class VaultItemState(
+    val loading: Boolean = true,
+    val item: VaultItem? = null,
+    /** Eski şifreler (en yeni değişiklik önce, en çok 3). */
+    val history: List<VaultSecretHistory> = emptyList(),
+    val error: String? = null
+)
 
 @HiltViewModel
 class VaultItemViewModel @Inject constructor(
@@ -72,8 +79,8 @@ class VaultItemViewModel @Inject constructor(
     private val error = MutableStateFlow<String?>(null)
 
     /** Kayıt değişince/arşivlenince kendiliğinden güncellenir; arşivlenmiş/yok ise item = null. */
-    val state: StateFlow<VaultItemState> = combine(repo.observeById(id), error) { item, e ->
-        VaultItemState(loading = false, item = item, error = e)
+    val state: StateFlow<VaultItemState> = combine(repo.observeById(id), repo.observeHistory(id), error) { item, history, e ->
+        VaultItemState(loading = false, item = item, history = history, error = e)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), VaultItemState())
 
     fun touch() = access.touch()
@@ -93,7 +100,10 @@ data class VaultEditState(
     val url: String = "",
     val note: String = "",
     val error: String? = null,
-    val saving: Boolean = false
+    val saving: Boolean = false,
+    /** Düzenleme açıldığındaki şifre ve eski şifreler: yeniden kullanım uyarısı için (yeni kayıtta boş). */
+    val originalSecret: String? = null,
+    val previousSecrets: List<String> = emptyList()
 ) {
     // Şifre yanlışlıkla log'a düşmesin.
     override fun toString(): String = "VaultEditState(isEdit=$isEdit, title=$title, secret=***)"
@@ -116,13 +126,15 @@ class VaultEditViewModel @Inject constructor(
         viewModelScope.launch {
             if (id > 0) {
                 val item = repo.getById(id)
+                val previous = repo.getHistory(id).map { it.secret }
                 _state.update {
                     if (item == null) {
                         it.copy(loading = false, error = "Kasa kaydı bulunamadı.")
                     } else {
                         it.copy(
                             loading = false, title = item.title, username = item.username,
-                            secret = item.secret, url = item.url, note = item.note
+                            secret = item.secret, url = item.url, note = item.note,
+                            originalSecret = item.secret, previousSecrets = previous
                         )
                     }
                 }

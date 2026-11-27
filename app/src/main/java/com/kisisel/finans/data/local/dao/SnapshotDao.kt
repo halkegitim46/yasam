@@ -10,6 +10,7 @@ import com.kisisel.finans.data.local.entity.InvoiceTemplateEntity
 import com.kisisel.finans.data.local.entity.PaymentEntity
 import com.kisisel.finans.data.local.entity.PersonEntity
 import com.kisisel.finans.data.local.entity.TransactionEntity
+import com.kisisel.finans.data.local.entity.VaultHistoryEntity
 import com.kisisel.finans.data.local.entity.VaultItemEntity
 
 /** Tüm tabloları olduğu gibi okuma/yazma (şifreli veritabanına geçiş ve yedekleme için). */
@@ -37,6 +38,10 @@ interface SnapshotDao {
     @Query("DELETE FROM vault_items") suspend fun deleteVaultItems()
     @Insert suspend fun insertVaultItems(items: List<VaultItemEntity>)
 
+    @Query("SELECT * FROM vault_history ORDER BY id") suspend fun vaultHistory(): List<VaultHistoryEntity>
+    @Query("DELETE FROM vault_history") suspend fun deleteVaultHistory()
+    @Insert suspend fun insertVaultHistory(items: List<VaultHistoryEntity>)
+
     @Insert suspend fun insertPersons(items: List<PersonEntity>)
     @Insert suspend fun insertInvoiceTemplates(items: List<InvoiceTemplateEntity>)
     @Insert suspend fun insertInvoiceOccurrences(items: List<InvoiceOccurrenceEntity>)
@@ -48,7 +53,8 @@ interface SnapshotDao {
         "SELECT (SELECT COUNT(*) FROM persons) + (SELECT COUNT(*) FROM invoice_templates) + " +
             "(SELECT COUNT(*) FROM invoice_occurrences) + (SELECT COUNT(*) FROM transactions) + " +
             "(SELECT COUNT(*) FROM payments) + (SELECT COUNT(*) FROM app_settings) + " +
-            "(SELECT COUNT(*) FROM agenda_items) + (SELECT COUNT(*) FROM vault_items)"
+            "(SELECT COUNT(*) FROM agenda_items) + (SELECT COUNT(*) FROM vault_items) + " +
+            "(SELECT COUNT(*) FROM vault_history)"
     )
     suspend fun totalRows(): Int
 }

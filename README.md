@@ -13,7 +13,7 @@ Kullanım için: [`docs/KULLANIM_KILAVUZU.md`](docs/KULLANIM_KILAVUZU.md) · Mim
 - **Faturalar**: elektrik, su, doğalgaz, internet, telefon, kira, aidat, kredi, diğer; sabit/değişken tutar; aylık/yıllık/özel tekrar;
   her dönem ayrı kayıt; fatura ödenince kişinin alacağına eklenir.
 - **Hatırlatmalar** (WorkManager): fatura vadeleri (7/3/1 gün önce, vade günü, gecikme), **borç/alacak vadeleri** (3/1 gün önce, vade günü, gecikince 3 günde bir; Ayarlar'dan kapatılabilir) ve **ajanda notları** (tarih/saatli, zamanında / 1 saat / 1 gün önce); bildirime dokununca ilgili ekran açılır.
-- **Şifre Kasası** (Ayarlar → Güvenlik): hesap/site/uygulama şifreleriniz şifreli veritabanında saklanır; açarken uygulama kilidinden bağımsız **yeniden doğrulama** (parola/PIN/biyometrik) istenir, arka plana geçince kilitlenir; şifreler varsayılan gizli, panoya kopyalama 30 sn sonra temizlenir; güçlü şifre üretici ve güç tahmini vardır. Şifreler yedeğe (yedek parolanızla şifrelenmiş olarak) dahildir.
+- **Şifre Kasası** (Ayarlar → Güvenlik): hesap/site/uygulama şifreleriniz şifreli veritabanında saklanır; açarken uygulama kilidinden bağımsız **yeniden doğrulama** (parola/PIN/biyometrik) istenir, arka plana geçince kilitlenir; şifreler varsayılan gizli, panoya kopyalama 30 sn sonra temizlenir; güçlü şifre üretici ve güç tahmini vardır; şifre değişince **son 3 eski şifre** tarihiyle saklanır. Şifreler yedeğe (yedek parolanızla şifrelenmiş olarak) dahildir.
 - **Yan menü (hamburger)**: ana bölümlerin sol üst köşesindeki ☰ ile (veya soldan kaydırarak) tüm bölümlere, Ajanda'ya ve Şifre Kasası'na erişim.
 - **Ajanda**: faturalar, vadesi olan borç/alacaklar ve kendi notlarınız gün gün tek zaman çizelgesinde; notlar tamamlanabilir, kişiye bağlanabilir, hatırlatıcı kurulabilir.
 - **Raporlar**: aylık/yıllık özet, önceki dönemle karşılaştırma, kişi dökümü, fatura ödeme geçmişi, tahsilat geçmişi,
@@ -34,9 +34,9 @@ Yerelde: AGP 9.5'i destekleyen güncel Android Studio'da klasörü açın (JDK 1
 
 **Teknoloji yığını (Kasım 2026):** AGP 9.5.2 (yerleşik Kotlin, yeni DSL), Gradle 9.7.1, Kotlin 2.4.21, KSP 2.3.14, Hilt 2.60.1, Room 2.8.5, Compose BOM 2026.11.01 (Compose 1.13 / Material 3 1.5), Navigation 2.10.2, WorkManager 2.12.0, DataStore 1.3.0, Lifecycle 2.11.1, `compileSdk 37.1`, `targetSdk 36` (Android 16), `minSdk 26`. Uyumluluk kuralları ve yükseltme yöntemi: `docs/UYUMLULUK.md`.
 
-> **Veritabanı şema sürümü 3** (2: ajanda, 3: şifre kasası). Mevcut kurulumlar açılışta otomatik ve veri kaybı olmadan yükseltilir (`MigrationV2Test`, `MigrationV3Test`).
+> **Veritabanı şema sürümü 4** (2: ajanda, 3: şifre kasası, 4: kasa şifre geçmişi). Mevcut kurulumlar açılışta otomatik ve veri kaybı olmadan yükseltilir (`MigrationV2Test`, `MigrationV3Test`, `MigrationV4Test`).
 > Eski (sürüm 1) yedekler yeni sürümde geri yüklenebilir; yeni sürüm yedekleri eski uygulama sürümünde açılmaz (güncelleme istenir).
-> Şema dosyasını (`app/schemas/.../3.json`) depoya işlemek için aşağıdaki workflow'u yeniden çalıştırın.
+> Şema dosyasını (`app/schemas/.../4.json`) depoya işlemek için aşağıdaki workflow'u yeniden çalıştırın.
 
 ## Depo ilk kurulumu (bir kez): Gradle wrapper + Room şemaları
 Wrapper dosyaları (`gradlew`, `gradle/wrapper/*`) ve Room şemaları (`app/schemas/**`) depoda olmalı: aynı Gradle sürümüyle tekrarlanabilir derleme

@@ -18,6 +18,8 @@ object BackupSnapshotValidator {
     private val MIN_DAY = LocalDate.of(2000, 1, 1).toEpochDay()
     private val MAX_DAY = LocalDate.of(2100, 12, 31).toEpochDay()
     private const val MAX = Money.MAX_KURUS
+    /** Uygulama en çok 3 tutar; yedek doğrulaması gelecekteki küçük artışlara karşı toleranslıdır. */
+    private const val MAX_HISTORY_PER_ITEM = 10
     private const val MAX_PROBLEMS = 50
 
     fun validate(s: DatabaseSnapshot): List<String> {
@@ -151,6 +153,20 @@ object BackupSnapshotValidator {
             if (v.title.length > 100 || v.username.length > 200 || v.secret.length > 1000 || v.url.length > 300 || v.note.length > 2000) {
                 bad("Kasa kaydı #${v.id} alan uzunlukları geçersiz")
             }
+        }
+
+        // ---- kasa şifre geçmişi ----
+        val historyIds = HashSet<Long>()
+        val historyPerItem = HashMap<Long, Int>()
+        for (h in s.vaultHistory) {
+            if (!historyIds.add(h.id)) bad("Kasa geçmişi #${h.id} tekrar ediyor")
+            if (h.itemId !in vaultIds) bad("Kasa geçmişi #${h.id} olmayan kasa kaydına bağlı")
+            if (h.secret.isEmpty() || h.secret.length > 1000) bad("Kasa geçmişi #${h.id} şifre uzunluğu geçersiz")
+            if (h.changedAt < 0) bad("Kasa geçmişi #${h.id} zamanı geçersiz")
+            historyPerItem.merge(h.itemId, 1) { a, b -> a + b }
+        }
+        for ((itemId, count) in historyPerItem) {
+            if (count > MAX_HISTORY_PER_ITEM) bad("Kasa kaydı #$itemId için çok fazla şifre geçmişi ($count)")
         }
 
         // ---- ayarlar ----

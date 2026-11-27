@@ -36,6 +36,7 @@ class SchemaGuardTest {
         val required = mutableListOf("persons", "transactions", "invoice_templates", "invoice_occurrences", "payments", "app_settings")
         if (found.last() >= 2) required += "agenda_items"
         if (found.last() >= 3) required += "vault_items"
+        if (found.last() >= 4) required += "vault_history"
         for (table in required) {
             assertTrue("$table tablosu şemada yok", Regex("\"tableName\"\\s*:\\s*\"$table\"").containsMatchIn(json))
         }

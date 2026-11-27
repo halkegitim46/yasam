@@ -31,6 +31,13 @@ import com.kisisel.finans.vault.SecureClipboard
 import com.kisisel.finans.vault.Strength
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
+import com.kisisel.finans.core.DateFormats
+import com.kisisel.finans.domain.model.VaultHistoryPolicy
+import com.kisisel.finans.domain.model.VaultSecretHistory
+import com.kisisel.finans.vault.PasswordReuse
+import java.time.Instant
+import java.time.LocalDateTime
+import java.time.ZoneId
 
 // ======================= Liste =======================
 @OptIn(ExperimentalMaterial3Api::class)
@@ -151,6 +158,9 @@ fun VaultItemScreen(onBack: () -> Unit, onEdit: (Long) -> Unit) {
                         DetailRow("Kullanıcı adı", item.username, onCopy = { copy("Kullanıcı adı", item.username) })
                     }
                     SecretRow(item, revealed, onToggle = { revealed = !revealed; vm.touch() }, onCopy = { copy("Şifre", item.secret) })
+                    if (s.history.isNotEmpty()) {
+                        HistorySection(s.history, onCopy = { copy("Eski şifre", it) }, onTouch = vm::touch)
+                    }
                     if (item.url.isNotBlank()) DetailRow("Adres", item.url, onCopy = { copy("Adres", item.url) })
                     if (item.note.isNotBlank()) DetailRow("Not", item.note, onCopy = null)
 
@@ -185,6 +195,42 @@ private fun DetailRow(label: String, value: String, onCopy: (() -> Unit)?) {
             }
             if (onCopy != null) {
                 IconButton(onClick = onCopy) { Icon(Icons.Filled.ContentCopy, contentDescription = "$label kopyala") }
+            }
+        }
+    }
+}
+
+private fun formatMillis(ms: Long): String =
+    DateFormats.DATE_TIME.format(LocalDateTime.ofInstant(Instant.ofEpochMilli(ms), ZoneId.systemDefault()))
+
+/** Eski şifreler (en çok 3): varsayılan gizli, tek tek gösterilir/kopyalanır; kasa kilitlenince ekran da kapanır. */
+@Composable
+private fun HistorySection(history: List<VaultSecretHistory>, onCopy: (String) -> Unit, onTouch: () -> Unit) {
+    var revealed by remember { mutableStateOf(emptySet<Long>()) }
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Eski şifreler (son ${VaultHistoryPolicy.MAX_PER_ITEM})", style = MaterialTheme.typography.labelMedium)
+            history.forEach { h ->
+                val shown = h.id in revealed
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            if (shown) h.secret else "•".repeat(minOf(h.secret.length, 16)),
+                            style = MaterialTheme.typography.bodyLarge,
+                            fontFamily = FontFamily.Monospace
+                        )
+                        Text("Değiştirildi: ${formatMillis(h.changedAt)}", style = MaterialTheme.typography.bodySmall)
+                    }
+                    IconButton(onClick = { revealed = if (shown) revealed - h.id else revealed + h.id; onTouch() }) {
+                        Icon(
+                            if (shown) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                            contentDescription = if (shown) "Eski şifreyi gizle" else "Eski şifreyi göster"
+                        )
+                    }
+                    IconButton(onClick = { onCopy(h.secret) }) {
+                        Icon(Icons.Filled.ContentCopy, contentDescription = "Eski şifreyi kopyala")
+                    }
+                }
             }
         }
     }
@@ -257,6 +303,13 @@ fun VaultEditScreen(onBack: () -> Unit, onDone: () -> Unit) {
                 if (s.secret.isNotEmpty()) {
                     val rating = PasswordStrength.rate(s.secret)
                     Text("Güç tahmini: ${rating.label}", color = strengthColor(rating), style = MaterialTheme.typography.bodySmall)
+                }
+                if (s.isEdit && PasswordReuse.check(s.secret, s.originalSecret, s.previousSecrets) == PasswordReuse.Result.PREVIOUS) {
+                    Text(
+                        "Bu şifreyi bu kayıtta daha önce kullandınız. Yeni bir şifre seçmeniz önerilir.",
+                        color = MaterialTheme.colorScheme.tertiary,
+                        style = MaterialTheme.typography.bodySmall
+                    )
                 }
                 OutlinedButton(onClick = { showGenerator = true }, modifier = Modifier.fillMaxWidth()) { Text("Güçlü şifre üret") }
                 OutlinedTextField(

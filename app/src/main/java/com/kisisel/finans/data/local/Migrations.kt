@@ -55,5 +55,20 @@ object Migrations {
         }
     }
 
-    val ALL: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3)
+    /** Sürüm 4: kasa şifre geçmişi (`vault_history`). Mevcut tablolara dokunmaz. */
+    val MIGRATION_3_4 = object : Migration(3, 4) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS `vault_history` (" +
+                    "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                    "`itemId` INTEGER NOT NULL, " +
+                    "`secret` TEXT NOT NULL, " +
+                    "`changedAt` INTEGER NOT NULL, " +
+                    "FOREIGN KEY(`itemId`) REFERENCES `vault_items`(`id`) ON UPDATE NO ACTION ON DELETE RESTRICT )"
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_vault_history_itemId` ON `vault_history` (`itemId`)")
+        }
+    }
+
+    val ALL: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
 }

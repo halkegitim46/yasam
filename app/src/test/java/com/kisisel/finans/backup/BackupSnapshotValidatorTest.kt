@@ -20,6 +20,7 @@ import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.LocalDate
+import com.kisisel.finans.data.local.entity.VaultHistoryEntity
 
 class BackupSnapshotValidatorTest {
     private val day = LocalDate.of(2026, 11, 4).toEpochDay()
@@ -259,5 +260,28 @@ class BackupSnapshotValidatorTest {
     @Test fun vaultProblemMessagesNeverContainTheSecret() {
         val v = valid().copy(vaultItems = listOf(vault(1, title = " ", secret = "GizliDeger-42")))
         assertTrue(BackupSnapshotValidator.validate(v).none { it.contains("GizliDeger-42") })
+    }
+
+    // ---- kasa şifre geçmişi ----
+    private fun hist(id: Long = 1, itemId: Long = 1, secret: String = "eski", at: Long = 5) = VaultHistoryEntity(id, itemId, secret, at)
+
+    @Test fun validHistoryPasses() {
+        val v = valid().copy(vaultItems = listOf(vault(1)), vaultHistory = listOf(hist(1), hist(2), hist(3)))
+        assertEquals(emptyList<String>(), BackupSnapshotValidator.validate(v))
+    }
+
+    @Test fun vaultHistoryRules() {
+        val v = valid().copy(vaultItems = listOf(vault(1)))
+        expect(v.copy(vaultHistory = listOf(hist(1), hist(1))), "Kasa geçmişi #1 tekrar ediyor")
+        expect(v.copy(vaultHistory = listOf(hist(1, itemId = 99))), "olmayan kasa kaydına bağlı")
+        expect(v.copy(vaultHistory = listOf(hist(1, secret = ""))), "şifre uzunluğu geçersiz")
+        expect(v.copy(vaultHistory = listOf(hist(1, secret = "s".repeat(1001)))), "şifre uzunluğu geçersiz")
+        expect(v.copy(vaultHistory = listOf(hist(1, at = -1))), "zamanı geçersiz")
+        expect(v.copy(vaultHistory = (1L..11L).map { hist(it) }), "çok fazla şifre geçmişi")
+    }
+
+    @Test fun vaultHistoryMessagesNeverContainTheSecret() {
+        val v = valid().copy(vaultItems = listOf(vault(1)), vaultHistory = listOf(hist(1, itemId = 99, secret = "EskiGizliDeger-7")))
+        assertTrue(BackupSnapshotValidator.validate(v).none { it.contains("EskiGizliDeger-7") })
     }
 }

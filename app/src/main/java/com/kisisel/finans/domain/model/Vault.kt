@@ -26,3 +26,13 @@ data class VaultUpdate(
 ) {
     override fun toString(): String = "VaultUpdate(id=$id, title=$title, secret=***)"
 }
+
+/** Kasa şifre geçmişi politikası: kayıt başına tutulan ESKİ şifre sayısı. */
+object VaultHistoryPolicy {
+    const val MAX_PER_ITEM = 3
+}
+
+/** Bir kasa kaydının eski şifresi ve değiştirildiği an (epoch ms). */
+data class VaultSecretHistory(val id: Long, val secret: String, val changedAt: Long) {
+    override fun toString(): String = "VaultSecretHistory(id=$id, secret=***)"
+}
